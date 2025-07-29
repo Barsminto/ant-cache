@@ -1,0 +1,13 @@
+{
+  "server": {
+    "host": "localhost",
+    "port": "8890"
+  },
+  "auth": {
+    "password": ""
+  },
+  "persistence": {
+    "atd_interval": "1h",
+    "acl_interval": "1s"
+  }
+}
