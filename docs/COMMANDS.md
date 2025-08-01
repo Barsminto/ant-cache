@@ -1,460 +1,560 @@
 # Commands Reference
 
-Complete reference for all Ant-Cache commands with syntax, parameters, and examples.
+This document provides a complete reference for all Ant-Cache commands with syntax, examples, and usage patterns.
 
-## Command Syntax
+## Command Overview
 
-All commands follow this format:
+Ant-Cache supports Redis-compatible commands with additional TTL functionality and advanced data types:
+
+| Command | Purpose | Data Type | TTL Support | Status |
+|---------|---------|-----------|-------------|---------|
+| `SET` | Store string value | String | ✅ Yes | ✅ Implemented |
+| `SETS` | Store array value | Array | ✅ Yes | ✅ Implemented |
+| `SETX` | Store object value | Object | ✅ Yes | ✅ Implemented |
+| `GET` | Retrieve value by key | Any | ❌ No | ✅ Implemented |
+| `DEL` | Delete key | Any | ❌ No | ✅ Implemented |
+| `KEYS` | List keys by pattern | Any | ❌ No | ✅ Implemented |
+| `FLUSHALL` | Clear all data | Any | ❌ No | ✅ Implemented |
+
+## Connection
+
+Connect to Ant-Cache using any TCP client:
+
+```bash
+# Using netcat
+nc localhost 8890
+
+# Using telnet
+telnet localhost 8890
+
+# Using Redis CLI (basic commands work)
+redis-cli -h localhost -p 8890
 ```
-COMMAND key [-t TTL] [arguments...]
+
+## String Operations
+
+### SET Command
+
+Store a key-value pair with optional TTL.
+
+**Syntax:**
 ```
-
-### TTL Parameter
-
-The `-t` parameter specifies time-to-live and must come immediately after the key:
-- `-t 30s` - 30 seconds
-- `-t 5m` - 5 minutes
-- `-t 2h` - 2 hours
-- `-t 1d` - 1 day
-- `-t 1y` - 1 year
-- `-t 60` - 60 seconds (plain numbers default to seconds)
-
-## String Commands
-
-### SET - Set String Value
-
-**Syntax:** `SET key [-t ttl] value`
-
-**Description:** Sets a string value for the specified key.
+SET key value
+SET key -t TTL value
+```
 
 **Parameters:**
-- `key` - Key name
-- `ttl` - Optional expiration time
-- `value` - String value to store
-
-**Returns:** `OK`
+- `key`: String key name
+- `value`: String value (can contain spaces)
+- `TTL`: Time-to-live with units (s, m, h, d, y)
 
 **Examples:**
 ```bash
-SET user:name "John Doe"
-SET session:abc123 -t 30m "session_data"
-SET counter -t 3600 "100"
-SET message "Hello World"
+# Basic set
+SET username "john_doe"
+# Response: OK
+
+# Set with TTL (30 seconds)
+SET session:abc123 -t 30s "active_session"
+# Response: OK
+
+# Set with different TTL units
+SET cache:data -t 5m "temporary_data"    # 5 minutes
+SET user:token -t 2h "auth_token"        # 2 hours
+SET config:key -t 1d "daily_config"     # 1 day
+SET backup:data -t 1y "yearly_backup"   # 1 year
+
+# Set with quoted values containing spaces
+SET message -t 1h "Hello, World! This is a test message."
+# Response: OK
 ```
 
-### SETNX - Set String If Not Exists
+**TTL Units:**
+- `s`: seconds
+- `m`: minutes
+- `h`: hours
+- `d`: days
+- `y`: years
 
-**Syntax:** `SETNX key [-t ttl] value`
+### SETS Command
 
-**Description:** Sets a string value only if the key does not already exist. This is an atomic operation.
+Store an array value with optional TTL using simple space-separated syntax.
+
+**Syntax:**
+```
+SETS key element1 element2 element3 ...
+SETS key -t TTL element1 element2 element3 ...
+```
 
 **Parameters:**
-- `key` - Key name
-- `ttl` - Optional expiration time
-- `value` - String value to store
-
-**Returns:** 
-- `1` - Key was set successfully
-- `0` - Key already exists, not set
+- `key`: String key name
+- `element1 element2 ...`: Array elements (space-separated)
+- `TTL`: Time-to-live with units (s, m, h, d, y)
 
 **Examples:**
 ```bash
-SETNX lock:resource1 -t 30s "process_1"
-# Returns: 1 (lock acquired)
+# Basic array set
+SETS fruits apple banana cherry
+# Response: OK
 
-SETNX lock:resource1 "process_2"
-# Returns: 0 (lock already held)
+# Array with TTL (5 minutes)
+SETS temp_list -t 5m one two three four
+# Response: OK
+
+# Array with quoted elements (spaces in values)
+SETS messages "hello world" "good morning" "see you later"
+# Response: OK
+
+# Single element array
+SETS single_item only_one
+# Response: OK
 ```
 
-## Array Commands
+**Important Notes:**
+- Elements are space-separated, no JSON required
+- Use quotes for elements containing spaces
+- All array elements are stored as strings
+- Retrieved arrays display as: `[item1 item2 item3]`
 
-### SETS - Set Array Value
+### SETX Command
 
-**Syntax:** `SETS key [-t ttl] item1 [item2 item3 ...]`
+Store an object (key-value map) with optional TTL using simple key-value pair syntax.
 
-**Description:** Sets an array of string values for the specified key.
+**Syntax:**
+```
+SETX key field1 value1 field2 value2 ...
+SETX key -t TTL field1 value1 field2 value2 ...
+```
 
 **Parameters:**
-- `key` - Key name
-- `ttl` - Optional expiration time
-- `item1, item2, ...` - Array elements
-
-**Returns:** `OK`
+- `key`: String key name
+- `field1 value1 field2 value2 ...`: Key-value pairs (must be even number of arguments)
+- `TTL`: Time-to-live with units (s, m, h, d, y)
 
 **Examples:**
 ```bash
-SETS user:tags work important urgent
-SETS shopping:list -t 1d milk bread eggs cheese
-SETS permissions read write execute
+# Basic object set
+SETX person name John age 30 city NYC
+# Response: OK
+
+# Object with TTL (2 hours)
+SETX session -t 2h user_id 1001 role admin expires 2024-12-31
+# Response: OK
+
+# Object with quoted values (spaces in values)
+SETX user_profile name "John Doe" email "john@example.com" role "admin user"
+# Response: OK
+
+# Simple configuration
+SETX config debug true port 8890 host localhost
+# Response: OK
 ```
 
-### SETSNX - Set Array If Not Exists
+**Important Notes:**
+- Arguments after key must be even number (key-value pairs)
+- Use quotes for values containing spaces
+- All object values are stored as strings
+- Retrieved objects display as: `map[field1:value1 field2:value2]`
 
-**Syntax:** `SETSNX key [-t ttl] item1 [item2 item3 ...]`
+### GET Command
 
-**Description:** Sets an array value only if the key does not already exist. This is an atomic operation.
+Retrieve the value associated with a key. Works with all data types (strings, arrays, objects).
 
-**Parameters:**
-- `key` - Key name
-- `ttl` - Optional expiration time
-- `item1, item2, ...` - Array elements
-
-**Returns:**
-- `1` - Key was set successfully
-- `0` - Key already exists, not set
+**Syntax:**
+```
+GET key
+```
 
 **Examples:**
 ```bash
-SETSNX user:permissions -t 1h read write admin
-# Returns: 1 (permissions set)
+# Get string value
+GET username
+# Response: john_doe
 
-SETSNX user:permissions read
-# Returns: 0 (permissions already exist)
+# Get array value
+GET users
+# Response: [alice bob charlie]
+
+# Get object value
+GET user:1001
+# Response: {"age":"30","city":"NYC","name":"John"}
+
+# Get non-existent key
+GET nonexistent
+# Response: NULL
+
+# Get expired key
+GET expired_key
+# Response: NULL
 ```
 
-## Object Commands
+**Return Formats:**
+- **String**: Plain text value
+- **Array**: Space-separated values in brackets: `[item1 item2 item3]`
+- **Object**: Standard JSON format: `{"key1":"value1","key2":"value2"}`
 
-### SETX - Set Object Value
+### DEL Command
 
-**Syntax:** `SETX key [-t ttl] field1 value1 [field2 value2 ...]`
+Delete a key and its associated value.
 
-**Description:** Sets an object (key-value pairs) for the specified key.
-
-**Parameters:**
-- `key` - Key name
-- `ttl` - Optional expiration time
-- `field1 value1, field2 value2, ...` - Field-value pairs
-
-**Returns:** `OK`
+**Syntax:**
+```
+DEL key
+```
 
 **Examples:**
 ```bash
-SETX user:profile name "John" age 30 email "john@example.com"
-SETX config:app -t 1h debug true port 8080 host "localhost"
-SETX session:data -t 30m user_id 1001 role admin last_seen "2025-01-01"
-```
-
-### SETXNX - Set Object If Not Exists
-
-**Syntax:** `SETXNX key [-t ttl] field1 value1 [field2 value2 ...]`
-
-**Description:** Sets an object value only if the key does not already exist. This is an atomic operation.
-
-**Parameters:**
-- `key` - Key name
-- `ttl` - Optional expiration time
-- `field1 value1, field2 value2, ...` - Field-value pairs
-
-**Returns:**
-- `1` - Key was set successfully
-- `0` - Key already exists, not set
-
-**Examples:**
-```bash
-SETXNX user:settings -t 24h theme dark language en timezone "UTC"
-# Returns: 1 (settings created)
-
-SETXNX user:settings theme light
-# Returns: 0 (settings already exist)
-```
-
-## Query Commands
-
-### GET - Get Value
-
-**Syntax:** `GET key1 [key2 key3 ...]`
-
-**Description:** Retrieves the value(s) for the specified key(s).
-
-**Parameters:**
-- `key1, key2, ...` - One or more key names
-
-**Returns:**
-- Single key: Returns the value directly
-- Multiple keys: Returns JSON object with key-value pairs
-- Non-existent key: `NOT_FOUND`
-
-**Examples:**
-```bash
-# Single key
-GET user:name
-# Returns: John Doe
-
-# Multiple keys
-GET user:name user:age user:email
-# Returns: {"user:age":"30","user:email":"john@example.com","user:name":"John Doe"}
-
-# Array value
-GET user:tags
-# Returns: ["work","important","urgent"]
-
-# Object value
-GET user:profile
-# Returns: {"age":"30","email":"john@example.com","name":"John"}
-
-# Non-existent key
-GET missing:key
-# Returns: NOT_FOUND
-```
-
-## Management Commands
-
-### DEL - Delete Keys
-
-**Syntax:** `DEL key1 [key2 key3 ...]`
-
-**Description:** Deletes one or more keys from the cache.
-
-**Parameters:**
-- `key1, key2, ...` - One or more key names to delete
-
-**Returns:** Number of keys successfully deleted
-
-**Examples:**
-```bash
-# Delete single key
-DEL user:name
-# Returns: 1
-
-# Delete multiple keys
-DEL user:name user:age user:email
-# Returns: 2 (if one key didn't exist)
+# Delete existing key
+DEL username
+# Response: OK
 
 # Delete non-existent key
-DEL missing:key
-# Returns: 0
+DEL nonexistent
+# Response: NOT_FOUND
 ```
 
-### KEYS - List All Keys
+## Utility Commands
 
-**Syntax:** `KEYS`
+### KEYS Command
 
-**Description:** Lists all keys currently stored in the cache with their data types.
+List all keys matching a pattern.
 
-**Parameters:** None
+**Syntax:**
+```
+KEYS pattern
+```
 
-**Returns:** List of keys in format `keyname (type)`
+**Pattern Matching:**
+- `*`: Match any characters
+- `?`: Match single character
+- `[abc]`: Match any character in brackets
+- `[a-z]`: Match any character in range
 
 **Examples:**
 ```bash
-KEYS
-# Returns:
-# user:name (string)
-# user:tags (array)
-# user:profile (object)
-# session:abc123 (string)
+# List all keys
+KEYS *
+# Response: key1 key2 key3
+
+# List keys with prefix
+KEYS user:*
+# Response: user:1001 user:1002 user:admin
+
+# List keys with suffix
+KEYS *:token
+# Response: auth:token session:token
+
+# List keys with pattern
+KEYS session:???
+# Response: session:abc session:xyz
+
+# No matching keys
+KEYS nonexistent:*
+# Response: EMPTY
 ```
 
-### FLUSHALL - Clear All Data
+### FLUSHALL Command
 
-**Syntax:** `FLUSHALL`
+Remove all keys and values from the cache.
 
-**Description:** Removes all keys from the cache. Use with extreme caution!
-
-**Parameters:** None
-
-**Returns:** `OK n keys deleted` where n is the number of deleted keys
-
-**Examples:**
-```bash
+**Syntax:**
+```
 FLUSHALL
-# Returns: OK 15 keys deleted
 ```
-
-## Authentication Commands
-
-### AUTH - Authenticate
-
-**Syntax:** `AUTH password`
-
-**Description:** Authenticates with the server using the provided password. Only required if authentication is enabled in the configuration.
-
-**Parameters:**
-- `password` - The authentication password
-
-**Returns:**
-- `OK authenticated` - Authentication successful
-- `ERROR invalid password` - Wrong password
-- `OK no authentication required` - Authentication not enabled
 
 **Examples:**
 ```bash
-AUTH mypassword
-# Returns: OK authenticated
+# Clear all data
+FLUSHALL
+# Response: OK
+
+# Verify all data is cleared
+KEYS *
+# Response: EMPTY
 ```
 
-## Response Formats
+## Advanced Usage
+
+### Working with Different Data Types
+
+```bash
+# String data
+SET message -t 1h "Hello, World!"
+
+# Array data (user lists, tags, etc.)
+SETS tags -t 30m golang cache redis performance
+SETS user_roles admin editor viewer
+
+# Object data (structured information)
+SETX user:profile -t 2h name John email john@example.com role admin
+SETX app:config debug false timeout 30s max_connections 1000
+
+# Mixed data types in same cache
+SET simple_key "simple_value"
+SETS list_key item1 item2 item3
+SETX object_key field1 value1 field2 value2
+```
+
+### Data Type Use Cases
+
+**Strings (`SET`)**:
+- Simple key-value pairs
+- Configuration values
+- Session tokens
+- Cached computed results
+
+**Arrays (`SETS`)**:
+- User lists and groups
+- Tags and categories
+- Menu items
+- Search results
+
+**Objects (`SETX`)**:
+- User profiles
+- Application configuration
+- Structured data
+- API responses
+
+### Batch Operations
+
+```bash
+# Multiple operations in sequence
+SET counter -t 1h "1"
+SETS active_users -t 30m alice bob charlie
+SETX app_status -t 1d status active uptime 24h version 1.0
+
+# Verify all operations
+KEYS *
+GET counter          # Response: 1
+GET active_users     # Response: [alice bob charlie]
+GET app_status       # Response: {"status":"active","uptime":"24h","version":"1.0"}
+```
+
+### TTL Examples
+
+```bash
+# Short-term cache (30 seconds)
+SET temp:calculation -t 30s "result_12345"
+
+# Session data (30 minutes)
+SET session:user123 -t 30m "logged_in"
+
+# Daily cache (24 hours)
+SET daily:stats -t 1d "processed_1000_items"
+
+# Long-term cache (1 week = 7 days)
+SET weekly:report -t 7d "weekly_summary_data"
+```
+
+## Error Handling
+
+### Common Error Responses
+
+```bash
+# Invalid command
+INVALID_COMMAND
+# Response: ERROR unknown command
+
+# Missing parameters
+SET
+# Response: ERROR SET requires key and value
+
+GET
+# Response: ERROR GET requires key
+
+DEL
+# Response: ERROR DEL requires key
+
+# Invalid TTL format
+SET key -t invalid_ttl value
+# Response: ERROR invalid ttl value: invalid TTL format: invalid_ttl
+
+# SETS with no elements
+SETS empty_key
+# Response: ERROR SETS requires key and at least one array element
+
+# SETX with odd number of arguments
+SETX user name John age
+# Response: ERROR SETX requires even number of arguments for key-value pairs
+
+# SETX with insufficient arguments
+SETX user name
+# Response: ERROR SETX requires key and at least one key-value pair
+```
 
 ### Success Responses
 
-- `OK` - Command executed successfully
-- `1` / `0` - Boolean result (for NX commands)
-- `Number` - Numeric result (e.g., count of deleted keys)
-- `String` - Direct string value
-- `JSON Array` - Array data: `["item1","item2","item3"]`
-- `JSON Object` - Object data: `{"field1":"value1","field2":"value2"}`
-
-### Error Responses
-
-All errors start with `ERROR`:
-
-- `ERROR invalid command format` - Syntax error in command
-- `ERROR invalid ttl value` - Invalid TTL format
-- `ERROR missing key` - Key parameter missing
-- `ERROR unknown command` - Command not recognized
-- `ERROR authentication required` - Must authenticate first
-- `ERROR invalid password` - Wrong password provided
-
-## Command Examples by Use Case
-
-### Session Management
-
 ```bash
-# Create session
-SETX session:abc123 -t 30m user_id 1001 username "john" role "admin"
+# Successful operations
+SET key value          # Response: OK
+GET key               # Response: value
+DEL key               # Response: OK
+KEYS *                # Response: key1 key2 key3
+FLUSHALL              # Response: OK
 
-# Get session
-GET session:abc123
-
-# Update session (extend TTL)
-SETX session:abc123 -t 30m user_id 1001 username "john" role "admin" last_activity "2025-01-01T10:00:00Z"
-
-# Delete session
-DEL session:abc123
+# Not found responses
+GET nonexistent       # Response: NULL
+DEL nonexistent       # Response: NOT_FOUND
+KEYS nomatch:*        # Response: EMPTY
 ```
 
-### Caching API Responses
+## Performance Considerations
+
+### Efficient Key Naming
 
 ```bash
-# Cache API response
-SET api:users:list -t 5m "[{\"id\":1,\"name\":\"John\"},{\"id\":2,\"name\":\"Jane\"}]"
+# Good: Hierarchical naming
+SET user:1001:profile "data"
+SET user:1001:settings "data"
+SET session:abc123:data "data"
 
-# Get cached response
-GET api:users:list
+# Good: Consistent prefixes for KEYS operations
+SET cache:user:1001 "data"
+SET cache:session:abc123 "data"
+SET temp:calculation:xyz "data"
 
-# Clear cache
-DEL api:users:list
+# Avoid: Very long keys (impacts memory)
+SET this_is_a_very_long_key_name_that_uses_too_much_memory "data"
 ```
 
-### Distributed Locking
+### Batch Operations
 
 ```bash
-# Acquire lock
-SETNX lock:payment:order123 -t 30s "process_1"
-# Returns: 1 (acquired) or 0 (already locked)
+# Efficient: Group related operations
+SET user:1001:name "John"
+SET user:1001:email "john@example.com"
+SET user:1001:status "active"
 
-# Check lock
-GET lock:payment:order123
-
-# Release lock
-DEL lock:payment:order123
+# Less efficient: Many small unrelated operations
+SET a "1"
+SET b "2"
+SET c "3"
 ```
 
-### Configuration Storage
+### TTL Best Practices
 
 ```bash
-# Store configuration
-SETX app:config -t 1h 
-  database_host "localhost" 
-  database_port 5432 
-  debug_mode true 
-  max_connections 100
+# Use appropriate TTL for data lifecycle
+SET user:session -t 30m "active"      # Session data
+SET cache:expensive -t 1h "result"    # Computed results
+SET config:daily -t 1d "settings"     # Daily configuration
+SET backup:weekly -t 7d "data"        # Weekly backups
 
-# Get configuration
-GET app:config
-
-# Update single config value (requires full reset)
-SETX app:config -t 1h 
-  database_host "localhost" 
-  database_port 5432 
-  debug_mode false 
-  max_connections 100
+# Avoid very short TTLs for frequently accessed data
+SET frequent:data -t 5s "value"       # May cause cache misses
 ```
 
-### User Permissions
+## Integration Examples
+
+### Application Integration
+
+**Go Example:**
+```go
+package main
+
+import (
+    "fmt"
+    "net"
+    "bufio"
+)
+
+func main() {
+    conn, err := net.Dial("tcp", "localhost:8890")
+    if err != nil {
+        panic(err)
+    }
+    defer conn.Close()
+    
+    // Set different data types
+    fmt.Fprintf(conn, "SET simple_key simple_value\n")
+    response, _ := bufio.NewReader(conn).ReadString('\n')
+    fmt.Printf("SET response: %s", response)
+
+    fmt.Fprintf(conn, "SETX user name John age 30 city NYC\n")
+    response, _ = bufio.NewReader(conn).ReadString('\n')
+    fmt.Printf("SETX response: %s", response)
+
+    // Get values
+    fmt.Fprintf(conn, "GET simple_key\n")
+    response, _ = bufio.NewReader(conn).ReadString('\n')
+    fmt.Printf("GET string: %s", response)  // simple_value
+
+    fmt.Fprintf(conn, "GET user\n")
+    response, _ = bufio.NewReader(conn).ReadString('\n')
+    fmt.Printf("GET object: %s", response)  // {"age":"30","city":"NYC","name":"John"}
+}
+```
+
+**Python Example:**
+```python
+import socket
+
+def ant_cache_client():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect(('localhost', 8890))
+    
+    # Set different data types
+    sock.send(b'SETS tags python golang redis\n')
+    response = sock.recv(1024).decode().strip()
+    print(f"SETS response: {response}")
+
+    sock.send(b'SETX config -t 1h debug true port 8890\n')
+    response = sock.recv(1024).decode().strip()
+    print(f"SETX response: {response}")
+
+    # Get values
+    sock.send(b'GET tags\n')
+    response = sock.recv(1024).decode().strip()
+    print(f"GET array: {response}")  # [python golang redis]
+
+    sock.send(b'GET config\n')
+    response = sock.recv(1024).decode().strip()
+    print(f"GET object: {response}")  # {"debug":"true","port":"8890"}
+    
+    sock.close()
+
+ant_cache_client()
+```
+
+**Shell Script Example:**
+```bash
+#!/bin/bash
+
+# Function to execute Ant-Cache command
+execute_command() {
+    echo "$1" | nc localhost 8890
+}
+
+# Set user data
+execute_command "SET user:admin -t 2h admin_user"
+
+# Get user data
+result=$(execute_command "GET user:admin")
+echo "User data: $result"
+
+# List all user keys
+users=$(execute_command "KEYS user:*")
+echo "All users: $users"
+```
+
+## Command Line Interface
+
+When using the built-in CLI mode:
 
 ```bash
-# Set user permissions
-SETS user:1001:permissions -t 2h read write admin
+# Start CLI mode
+./ant-cache -cli
 
-# Check permissions
-GET user:1001:permissions
-
-# Add permissions (requires full reset)
-SETS user:1001:permissions -t 2h read write admin delete
+# CLI provides additional features:
+> help                    # Show available commands
+> SET key value          # Same syntax as TCP
+> GET key                # Same syntax as TCP
+> KEYS *                 # Same syntax as TCP
+> exit                   # Exit CLI mode
 ```
 
-## Best Practices
+## Next Steps
 
-### 1. TTL Parameter Position
-
-Always place `-t` immediately after the key:
-
-```bash
-# Correct
-SET mykey -t 30s myvalue
-SETS myarray -t 1h item1 item2
-SETX myobject -t 2h field1 value1
-
-# Incorrect
-SET mykey myvalue -t 30s
-SETS myarray item1 item2 -t 1h
-```
-
-### 2. Atomic Operations
-
-Use NX commands for race-condition-free operations:
-
-```bash
-# Safe lock acquisition
-SETNX lock:resource -t 30s "owner"
-
-# Safe initialization
-SETSNX user:permissions read write
-SETXNX app:settings theme dark lang en
-```
-
-### 3. Key Naming
-
-Use consistent, hierarchical naming:
-
-```bash
-# Good
-user:1001:profile
-session:abc123
-cache:api:users
-lock:resource:payment
-
-# Avoid
-user1001profile
-randomkey
-temp123
-```
-
-### 4. Error Handling
-
-Always check return values:
-
-```bash
-# Check SET result
-SET mykey myvalue
-# Expected: OK
-
-# Check SETNX result
-SETNX lock:resource "owner"
-# Check: 1 (success) or 0 (exists)
-
-# Handle NOT_FOUND
-GET missing:key
-# Handle: NOT_FOUND
-```
-
-## Performance Notes
-
-- **Batch Operations**: Use multi-key GET when possible
-- **TTL Efficiency**: Avoid very short TTLs (< 1s) unless necessary
-- **Key Length**: Keep key names reasonably short
-- **Value Size**: Keep individual values under 1MB for best performance
-- **Connection Reuse**: Reuse connections in high-traffic applications
-
-For more performance tips, see the [Performance Report](PERFORMANCE.md).
+- Review [Installation Guide](INSTALLATION.md) for setup instructions
+- Check [Performance Guide](PERFORMANCE.md) for optimization tips
+- See configuration examples in the `configs/` directory

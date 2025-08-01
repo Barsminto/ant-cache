@@ -2,6 +2,7 @@ package cache
 
 import (
 	"ant-cache/auth"
+	"bytes"
 	"container/heap"
 	"fmt"
 	"sync"
@@ -16,6 +17,45 @@ type CacheItem struct {
 	Type       string // string, array, object
 }
 
+// Memory pools for reducing GC pressure
+var (
+	// Buffer pool for string operations
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			return bytes.NewBuffer(make([]byte, 0, 1024))
+		},
+	}
+
+	// CacheItem pool for reusing cache items
+	itemPool = sync.Pool{
+		New: func() interface{} {
+			return &CacheItem{}
+		},
+	}
+
+	// String slice pool for batch operations
+	stringSlicePool = sync.Pool{
+		New: func() interface{} {
+			return make([]string, 0, 100)
+		},
+	}
+)
+
+// BatchOperation represents a batch of cache operations
+type BatchOperation struct {
+	Type  string // SET, GET, DEL
+	Key   string
+	Value interface{}
+	TTL   time.Duration
+}
+
+// BatchResult represents the result of a batch operation
+type BatchResult struct {
+	Success bool
+	Value   interface{}
+	Error   string
+}
+
 type Cache struct {
 	items map[string]*CacheItem
 	mu    sync.RWMutex
@@ -25,6 +65,10 @@ type Cache struct {
 	persistence *PersistenceManager
 	// Authentication manager
 	authManager *auth.AuthManager
+	// Batch processing channel
+	batchChan chan []BatchOperation
+	// Batch processing workers
+	batchWorkers int
 }
 
 // ExpirationHeap implements min heap for managing expiration times
@@ -57,6 +101,13 @@ func (h *ExpirationHeap) Pop() interface{} {
 	item.index = -1 // mark as deleted
 	*h = old[0 : n-1]
 	return item
+}
+
+// Remove removes an item from the heap
+func (h *ExpirationHeap) Remove(item *CacheItem) {
+	if item.index >= 0 && item.index < len(*h) {
+		heap.Remove(h, item.index)
+	}
 }
 
 func New() *Cache {
@@ -290,6 +341,162 @@ func (c *Cache) Cleanup() {
 // GetAuthManager obtain the authentication manager
 func (c *Cache) GetAuthManager() *auth.AuthManager {
 	return c.authManager
+}
+
+// Keys returns all keys matching the pattern (optimized with memory pool)
+func (c *Cache) Keys(pattern string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Get slice from pool
+	keys := stringSlicePool.Get().([]string)
+	keys = keys[:0] // Reset length but keep capacity
+	defer stringSlicePool.Put(keys)
+
+	now := time.Now().UnixNano()
+
+	for key, item := range c.items {
+		// Skip expired items
+		if item.Expiration > 0 && item.Expiration < now {
+			continue
+		}
+
+		// Simple pattern matching (only supports "*" for all keys)
+		if pattern == "*" {
+			keys = append(keys, key)
+		}
+		// Could add more pattern matching logic here if needed
+	}
+
+	// Return a copy since we're putting the slice back to pool
+	result := make([]string, len(keys))
+	copy(result, keys)
+	return result
+}
+
+// GetBuffer gets a buffer from the pool
+func GetBuffer() *bytes.Buffer {
+	return bufferPool.Get().(*bytes.Buffer)
+}
+
+// PutBuffer returns a buffer to the pool
+func PutBuffer(buf *bytes.Buffer) {
+	buf.Reset()
+	bufferPool.Put(buf)
+}
+
+// GetCacheItem gets a cache item from the pool
+func GetCacheItem() *CacheItem {
+	item := itemPool.Get().(*CacheItem)
+	// Reset the item
+	item.Value = nil
+	item.Expiration = 0
+	item.index = 0
+	item.key = ""
+	item.Type = ""
+	return item
+}
+
+// PutCacheItem returns a cache item to the pool
+func PutCacheItem(item *CacheItem) {
+	itemPool.Put(item)
+}
+
+// BatchExecute executes a batch of operations atomically
+func (c *Cache) BatchExecute(operations []BatchOperation) []BatchResult {
+	results := make([]BatchResult, len(operations))
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now().UnixNano()
+
+	for i, op := range operations {
+		switch op.Type {
+		case "SET":
+			item := GetCacheItem()
+			item.Value = op.Value
+			item.key = op.Key
+			item.Type = "string"
+
+			if op.TTL > 0 {
+				item.Expiration = now + op.TTL.Nanoseconds()
+				heap.Push(c.expirationHeap, item)
+			}
+
+			// Remove old item if exists
+			if oldItem, exists := c.items[op.Key]; exists {
+				if oldItem.Expiration > 0 {
+					c.expirationHeap.Remove(oldItem)
+				}
+				PutCacheItem(oldItem)
+			}
+
+			c.items[op.Key] = item
+			results[i] = BatchResult{Success: true}
+
+		case "GET":
+			if item, exists := c.items[op.Key]; exists {
+				if item.Expiration == 0 || item.Expiration > now {
+					results[i] = BatchResult{Success: true, Value: item.Value}
+				} else {
+					// Item expired
+					delete(c.items, op.Key)
+					c.expirationHeap.Remove(item)
+					PutCacheItem(item)
+					results[i] = BatchResult{Success: false, Error: "key not found"}
+				}
+			} else {
+				results[i] = BatchResult{Success: false, Error: "key not found"}
+			}
+
+		case "DEL":
+			if item, exists := c.items[op.Key]; exists {
+				delete(c.items, op.Key)
+				if item.Expiration > 0 {
+					c.expirationHeap.Remove(item)
+				}
+				PutCacheItem(item)
+				results[i] = BatchResult{Success: true}
+			} else {
+				results[i] = BatchResult{Success: false, Error: "key not found"}
+			}
+
+		default:
+			results[i] = BatchResult{Success: false, Error: "unknown operation"}
+		}
+	}
+
+	return results
+}
+
+// OptimizedSet uses memory pool for better performance
+func (c *Cache) OptimizedSet(key string, value interface{}, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now().UnixNano()
+
+	// Get item from pool
+	item := GetCacheItem()
+	item.Value = value
+	item.key = key
+	item.Type = "string"
+
+	if ttl > 0 {
+		item.Expiration = now + ttl.Nanoseconds()
+		heap.Push(c.expirationHeap, item)
+	}
+
+	// Remove old item if exists
+	if oldItem, exists := c.items[key]; exists {
+		if oldItem.Expiration > 0 {
+			c.expirationHeap.Remove(oldItem)
+		}
+		PutCacheItem(oldItem)
+	}
+
+	c.items[key] = item
 }
 
 // GetAllKeys returns all keys with their metadata

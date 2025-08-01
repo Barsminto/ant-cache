@@ -2,132 +2,15 @@ package cli
 
 import (
 	"ant-cache/cache"
-	"ant-cache/tcpserver"
+	"ant-cache/utils"
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
-
-// parseTTL parses TTL string with time units (s, m, h, d, y)
-// If no unit is specified, defaults to seconds
-func parseTTL(ttlStr string) (time.Duration, error) {
-	if ttlStr == "" {
-		return 0, nil
-	}
-
-	// Check if it's just a number (default to seconds)
-	if num, err := strconv.Atoi(ttlStr); err == nil {
-		return time.Duration(num) * time.Second, nil
-	}
-
-	// Parse with time units
-	re := regexp.MustCompile(`^(\d+)([smhdy])$`)
-	matches := re.FindStringSubmatch(strings.ToLower(ttlStr))
-	if len(matches) != 3 {
-		return 0, fmt.Errorf("invalid TTL format: %s", ttlStr)
-	}
-
-	num, err := strconv.Atoi(matches[1])
-	if err != nil {
-		return 0, fmt.Errorf("invalid number in TTL: %s", matches[1])
-	}
-
-	unit := matches[2]
-	switch unit {
-	case "s":
-		return time.Duration(num) * time.Second, nil
-	case "m":
-		return time.Duration(num) * time.Minute, nil
-	case "h":
-		return time.Duration(num) * time.Hour, nil
-	case "d":
-		return time.Duration(num) * 24 * time.Hour, nil
-	case "y":
-		return time.Duration(num) * 365 * 24 * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("invalid time unit: %s", unit)
-	}
-}
-
-// parseCommandWithQuotes parses a command line respecting quoted strings
-func parseCommandWithQuotes(input string) []string {
-	var parts []string
-	var current strings.Builder
-	inQuotes := false
-	quoteChar := byte(0)
-
-	input = strings.TrimSpace(input)
-
-	for i := 0; i < len(input); i++ {
-		char := input[i]
-
-		if !inQuotes {
-			// Not in quotes
-			if char == '"' || char == '\'' {
-				// Start of quoted string
-				inQuotes = true
-				quoteChar = char
-			} else if char == ' ' || char == '\t' {
-				// Whitespace - end current part
-				if current.Len() > 0 {
-					parts = append(parts, current.String())
-					current.Reset()
-				}
-				// Skip multiple whitespace
-				for i+1 < len(input) && (input[i+1] == ' ' || input[i+1] == '\t') {
-					i++
-				}
-			} else {
-				// Regular character
-				current.WriteByte(char)
-			}
-		} else {
-			// In quotes
-			if char == quoteChar {
-				// End of quoted string
-				inQuotes = false
-				quoteChar = 0
-			} else if char == '\\' && i+1 < len(input) {
-				// Escape sequence
-				i++
-				switch input[i] {
-				case 'n':
-					current.WriteByte('\n')
-				case 't':
-					current.WriteByte('\t')
-				case 'r':
-					current.WriteByte('\r')
-				case '\\':
-					current.WriteByte('\\')
-				case '"':
-					current.WriteByte('"')
-				case '\'':
-					current.WriteByte('\'')
-				default:
-					// Unknown escape, keep both characters
-					current.WriteByte('\\')
-					current.WriteByte(input[i])
-				}
-			} else {
-				// Regular character in quotes
-				current.WriteByte(char)
-			}
-		}
-	}
-
-	// Add final part
-	if current.Len() > 0 {
-		parts = append(parts, current.String())
-	}
-
-	return parts
-}
 
 func StartInteractiveCLI(cache *cache.Cache, host string, port string, configPassword string) {
 	// Check if authentication is required
@@ -169,14 +52,14 @@ func StartInteractiveCLI(cache *cache.Cache, host string, port string, configPas
 			break
 		}
 
-		parts := parseCommandWithQuotes(input)
+		parts := utils.ParseCommandWithQuotes(input)
 		if len(parts) == 0 {
 			fmt.Print("> ")
 			continue
 		}
 
 		switch strings.ToUpper(parts[0]) {
-		case "SET", "GET", "DEL", "SETS", "SETX", "SETNX", "SETSNX", "SETXNX", "KEYS", "FLUSHALL":
+		case "SET", "SETS", "SETX", "GET", "DEL", "KEYS", "FLUSHALL":
 			handleCacheCommand(cache, parts)
 			fmt.Print("> ")
 		case "AUTH":
@@ -190,82 +73,142 @@ func StartInteractiveCLI(cache *cache.Cache, host string, port string, configPas
 }
 
 func handleCacheCommand(cache *cache.Cache, parts []string) {
-	// Reuse command handling logic from tcpserver
-	handlers := tcpserver.CreateCommandHandlers()
 	cmd := strings.ToUpper(parts[0])
-	if handler, exists := handlers[cmd]; exists {
-		// Handle TTL parameter - only support after key, not for DEL, GET, KEYS and FLUSHALL commands
-		ttl := time.Duration(0)
-		var filteredParts []string
 
-		// DEL, GET, KEYS and FLUSHALL commands don't support TTL parameter
-		if cmd == "DEL" || cmd == "GET" || cmd == "KEYS" || cmd == "FLUSHALL" {
-			filteredParts = parts
+	// Parse TTL parameter
+	ttl := time.Duration(0)
+	var filteredParts []string
+
+	// DEL, GET, KEYS and FLUSHALL commands don't support TTL parameter
+	if cmd == "DEL" || cmd == "GET" || cmd == "KEYS" || cmd == "FLUSHALL" {
+		filteredParts = parts
+	} else {
+		// Handle TTL parameter - only support after key
+		// Format: COMMAND key -t TTL_VALUE [other_params...]
+		if len(parts) >= 4 && len(parts) > 2 && parts[2] == "-t" {
+			ttlValue, err := utils.ParseTTL(parts[3])
+			if err != nil {
+				fmt.Printf("ERROR: Invalid TTL value: %v\n", err)
+				return
+			}
+			ttl = ttlValue
+			// Remove -t and TTL value, keep command and key, then add remaining params
+			filteredParts = append([]string{parts[0], parts[1]}, parts[4:]...)
 		} else {
-			// Handle TTL parameter - only support after key
-			// Format: COMMAND key -t TTL_VALUE [other_params...]
-			if len(parts) >= 4 && len(parts) > 2 && parts[2] == "-t" {
-				ttlValue, err := parseTTL(parts[3])
+			// No TTL parameter
+			filteredParts = parts
+		}
+	}
+
+	// Execute commands directly
+	switch cmd {
+	case "SET":
+		if len(filteredParts) < 3 {
+			fmt.Println("ERROR: SET requires key and value")
+			return
+		}
+		key := filteredParts[1]
+		value := strings.Join(filteredParts[2:], " ")
+		cache.Set(key, value, ttl)
+		fmt.Println("OK")
+
+	case "SETS":
+		if len(filteredParts) < 3 {
+			fmt.Println("ERROR: SETS requires key and at least one array element")
+			return
+		}
+		key := filteredParts[1]
+		// All remaining parts become array elements
+		array := filteredParts[2:]
+
+		cache.Set(key, array, ttl)
+		fmt.Println("OK")
+
+	case "SETX":
+		if len(filteredParts) < 4 {
+			fmt.Println("ERROR: SETX requires key and at least one key-value pair")
+			return
+		}
+		if (len(filteredParts)-2)%2 != 0 {
+			fmt.Println("ERROR: SETX requires even number of arguments for key-value pairs")
+			return
+		}
+
+		key := filteredParts[1]
+		// Convert pairs to map: a b c d -> {a: b, c: d}
+		object := make(map[string]string)
+		for i := 2; i < len(filteredParts); i += 2 {
+			object[filteredParts[i]] = filteredParts[i+1]
+		}
+
+		cache.Set(key, object, ttl)
+		fmt.Println("OK")
+
+	case "GET":
+		if len(filteredParts) < 2 {
+			fmt.Println("ERROR: GET requires key")
+			return
+		}
+		key := filteredParts[1]
+		value, exists := cache.Get(key)
+		if !exists {
+			fmt.Println("NOT_FOUND")
+		} else {
+			// Format output based on data type
+			switch v := value.(type) {
+			case string:
+				// String: return as-is
+				fmt.Println(v)
+			case []string:
+				// Array: return as space-separated values in brackets
+				fmt.Printf("[%s]\n", strings.Join(v, " "))
+			case map[string]string:
+				// Object: return as JSON string
+				jsonBytes, err := json.Marshal(v)
 				if err != nil {
-					fmt.Printf("ERROR: Invalid TTL value: %v\n", err)
-					return
+					fmt.Printf("ERROR serializing object: %v\n", err)
+				} else {
+					fmt.Println(string(jsonBytes))
 				}
-				ttl = ttlValue
-				// Remove -t and TTL value, keep command and key, then add remaining params
-				filteredParts = append([]string{parts[0], parts[1]}, parts[4:]...)
-			} else {
-				// No TTL parameter
-				filteredParts = parts
+			default:
+				// Fallback for other types
+				fmt.Println(value)
 			}
 		}
 
-		// KEYS and FLUSHALL commands can work without key name
-		if (cmd == "KEYS" || cmd == "FLUSHALL") && len(filteredParts) < 1 {
-			fmt.Println("ERROR: Invalid command format")
+	case "DEL":
+		if len(filteredParts) < 2 {
+			fmt.Println("ERROR: DEL requires key")
 			return
 		}
-
-		// Other commands need at least 2 parameters
-		if cmd != "KEYS" && cmd != "FLUSHALL" && len(filteredParts) < 2 {
-			fmt.Println("ERROR: Missing key")
-			return
+		key := filteredParts[1]
+		deleted := cache.Delete(key)
+		if deleted {
+			fmt.Println("OK")
+		} else {
+			fmt.Println("NOT_FOUND")
 		}
 
-		// Create virtual connection
-		conn := &fakeConn{reader: nil, writer: nil}
-
-		// 对于KEYS和FLUSHALL命令，如果没有指定键名，传递空字符串
-		var key string
-		if len(filteredParts) >= 2 {
-			key = filteredParts[1]
+	case "KEYS":
+		pattern := "*"
+		if len(filteredParts) > 1 {
+			pattern = filteredParts[1]
+		}
+		keys := cache.Keys(pattern)
+		if len(keys) == 0 {
+			fmt.Println("No keys found")
+		} else {
+			fmt.Println(strings.Join(keys, " "))
 		}
 
-		handler.Execute(conn, cache, key, filteredParts, ttl)
+	case "FLUSHALL":
+		cache.FlushAll()
+		fmt.Println("OK")
 
-		// Automatically show prompt after command execution
-		// fmt.Print("> ") // Moved to main loop handling
-	} else {
+	default:
 		fmt.Println("ERROR: Unknown command")
-		// fmt.Print("> ") // Moved to main loop handling
 	}
 }
-
-type fakeConn struct {
-	reader *io.PipeReader
-	writer *io.PipeWriter
-}
-
-func (c *fakeConn) Read(b []byte) (n int, err error) { return 0, nil }
-func (c *fakeConn) Write(b []byte) (n int, err error) {
-	fmt.Print(string(b))
-	return len(b), nil
-}
-func (c *fakeConn) Close() error                       { return nil }
-func (c *fakeConn) LocalAddr() net.Addr                { return nil }
-func (c *fakeConn) RemoteAddr() net.Addr               { return nil }
-func (c *fakeConn) SetDeadline(t time.Time) error      { return nil }
-func (c *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
-func (c *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
 
 func handleAuthCommand(cache *cache.Cache, parts []string) {
 	authManager := cache.GetAuthManager()

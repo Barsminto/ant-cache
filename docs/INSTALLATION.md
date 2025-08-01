@@ -1,50 +1,163 @@
-# Installation Guide
+# Installation & Usage Guide
 
-This guide covers how to install, configure, and deploy Ant-Cache.
+This guide covers installation, configuration, and deployment of Ant-Cache.
 
 ## System Requirements
 
-- **Operating System**: Linux, macOS, Windows
-- **Memory**: 512MB minimum, 2GB+ recommended
-- **Disk**: 100MB for program and data files
-- **Go**: 1.19+ (if building from source)
+- **Go**: 1.19 or later
+- **OS**: Linux, macOS, Windows
+- **Memory**: 512MB minimum, 2GB+ recommended for production
+- **CPU**: 2+ cores recommended
+- **Network**: TCP port access (default: 8890)
 
-## Installation Methods
+## Installation
 
-### Method 1: Download Release
-
-1. Download the latest release for your platform from GitHub Releases
-2. Extract the archive:
-   ```bash
-   tar -xzf ant-cache-v1.0.0-linux-amd64.tar.gz
-   cd ant-cache-v1.0.0-linux-amd64
-   ```
-3. Run the installer (Linux/macOS):
-   ```bash
-   sudo ./scripts/install.sh
-   ```
-
-### Method 2: Build from Source
+### From Source
 
 ```bash
-# Clone repository
-git clone <repository-url>
+# Clone the repository
+git clone https://github.com/yourusername/ant-cache.git
 cd ant-cache
 
-# Build
+# Build the binary
 go build -o ant-cache
 
-# Create config file
-cp configs/config.json .
+# Verify installation
+./ant-cache -h
 ```
+
+### Using Build Script
+
+```bash
+# Build optimized release binary
+./scripts/build-release.sh
+
+# Binary will be created as ant-cache
+```
+
+## Basic Usage
+
+### Starting the Server
+
+```bash
+# Default mode (single-goroutine, maximum performance)
+./ant-cache
+
+# Pooled-goroutine mode (production recommended)
+./ant-cache -server pooled-goroutine -workers 200
+
+# With custom host and port
+./ant-cache -host 0.0.0.0 -port 9000
+
+# With configuration file
+./ant-cache -config configs/production.json
+
+# Background mode
+nohup ./ant-cache -config configs/production.json > ant-cache.log 2>&1 &
+```
+
+### Command Line Options
+
+```bash
+Usage: ./ant-cache [options]
+
+Options:
+  -server string
+        Server architecture: 'single-goroutine' or 'pooled-goroutine' (default: single-goroutine)
+  -workers int
+        Number of worker goroutines for pooled server (default: 200)
+  -host string
+        Server host address (default: localhost)
+  -port string
+        Server port (default: 8890)
+  -config string
+        Configuration file path
+  -cli
+        Start in interactive CLI mode
+  -h, -help
+        Show help message
+```
+
+### Interactive CLI Mode
+
+```bash
+# Start CLI mode
+./ant-cache -cli
+
+# CLI session example
+> SET user:1001 "John Doe"
+OK
+> GET user:1001
+John Doe
+> SET session:abc123 -t 3600s "active"
+OK
+> KEYS user:*
+user:1001
+> FLUSHALL
+OK
+> exit
+```
+
+## Server Architectures
+
+### Single-Goroutine Server
+
+**Best for**: Maximum performance, development, variable load patterns
+
+```bash
+# Start single-goroutine server
+./ant-cache -server single-goroutine
+
+# Performance characteristics
+# - Throughput: ~104K ops/sec
+# - Memory: Dynamic (scales with connections)
+# - Goroutines: One per connection
+# - Resource usage: Variable
+```
+
+**Use Cases**:
+- High-performance applications
+- Development and testing
+- Applications with variable connection patterns
+- When maximum throughput is required
+
+### Pooled-Goroutine Server
+
+**Best for**: Production environments, resource control, containers
+
+```bash
+# Start pooled-goroutine server
+./ant-cache -server pooled-goroutine -workers 200
+
+# Performance characteristics
+# - Throughput: ~103K ops/sec (99.1% of single-goroutine)
+# - Memory: Fixed and predictable
+# - Goroutines: Fixed pool size
+# - Resource usage: Controlled
+```
+
+**Use Cases**:
+- Production deployments
+- Container environments with memory limits
+- High-concurrency scenarios (1000+ connections)
+- Enterprise applications requiring stability
+
+### Pool Size Configuration
+
+| Scenario | Workers | Expected Load | Memory Usage |
+|----------|---------|---------------|--------------|
+| **Development** | 25-50 | < 1K ops/sec | ~100KB |
+| **Small Production** | 50-100 | 1K-10K ops/sec | ~200KB |
+| **Medium Production** | 100-200 | 10K-50K ops/sec | ~400KB |
+| **High Load** | 200-500 | 50K+ ops/sec | ~1MB |
+
+**Recommendation**: Start with **200 workers** and adjust based on monitoring.
 
 ## Configuration
 
-### Required Configuration File
+### Configuration File Format
 
-Ant-Cache requires a `config.json` file in the current directory or specified with `-config` flag.
-
-#### Default Configuration
+Ant-Cache uses JSON configuration files:
 
 ```json
 {
@@ -52,100 +165,106 @@ Ant-Cache requires a `config.json` file in the current directory or specified wi
     "host": "localhost",
     "port": "8890"
   },
+  "persistence": {
+    "atd_file": "cache.atd",
+    "atd_interval": "1h",
+    "acl_file": "cache.acl",
+    "acl_interval": "1s"
+  },
   "auth": {
     "password": ""
-  },
-  "persistence": {
-    "atd_interval": "1h",
-    "acl_interval": "1s"
   }
 }
 ```
 
-#### Configuration Options
+### Configuration Options
 
-**Server Settings:**
-- `host`: Server listening address (default: "localhost")
-- `port`: Server listening port (default: "8890")
+#### Server Section
+- `host`: Server bind address (default: "localhost")
+- `port`: Server port (default: "8890")
 
-**Authentication:**
+#### Persistence Section
+- `atd_file`: Snapshot file path (default: "cache.atd")
+- `atd_interval`: Snapshot interval (default: "1h")
+- `acl_file`: Append-only log file path (default: "cache.acl")
+- `acl_interval`: Log flush interval (default: "1s")
+
+#### Auth Section
 - `password`: Authentication password (empty = no auth)
 
-**Persistence:**
-- `atd_interval`: Snapshot save interval (e.g., "30m", "1h", "2h")
-- `acl_interval`: Command log sync interval (e.g., "1s", "5s")
+### Pre-configured Files
 
-### Production Configuration
-
-For production environments, create a secure configuration:
-
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": "8890"
-  },
-  "auth": {
-    "password": "your_secure_password_here"
-  },
-  "persistence": {
-    "atd_interval": "30m",
-    "acl_interval": "1s"
-  }
-}
-```
-
-## Running Ant-Cache
-
-### CLI Mode (Interactive)
+Use the provided configuration files in the `configs/` directory:
 
 ```bash
-# Use default config.json
-./ant-cache -cli
+# Production deployment
+./ant-cache -config configs/production.json
 
-# Use specific config file
-./ant-cache -config /path/to/config.json -cli
+# Development environment
+./ant-cache -config configs/development.json
+
+# Container deployment
+./ant-cache -config configs/container.json
 ```
 
-If authentication is enabled, you'll be prompted for a password.
+## Deployment
 
-### Server Mode
+### Production Deployment
 
 ```bash
-# Start TCP server
-./ant-cache
+# Create dedicated user
+sudo useradd -r -s /bin/false ant-cache
 
-# Use specific config
-./ant-cache -config /path/to/config.json
+# Create directories
+sudo mkdir -p /opt/ant-cache /var/lib/ant-cache /var/log/ant-cache
+sudo chown ant-cache:ant-cache /var/lib/ant-cache /var/log/ant-cache
+
+# Copy binary and config
+sudo cp ant-cache /opt/ant-cache/
+sudo cp configs/production.json /opt/ant-cache/config.json
+
+# Start service
+sudo -u ant-cache /opt/ant-cache/ant-cache -config /opt/ant-cache/config.json
 ```
 
-### Command Line Options
+### Manual Multi-Instance Deployment
 
 ```bash
-./ant-cache [options]
+# Create separate directories for each instance
+mkdir -p /opt/ant-cache-{1,2,3}
 
-Options:
-  -cli                Start interactive CLI mode
-  -config string      Configuration file path (default: config.json)
-  -query             Show current configuration
-  -h                 Show help
+# Copy binary and configs
+cp ant-cache /opt/ant-cache-1/
+cp ant-cache /opt/ant-cache-2/
+cp ant-cache /opt/ant-cache-3/
+
+cp configs/production.json /opt/ant-cache-1/config.json
+cp configs/production.json /opt/ant-cache-2/config.json
+cp configs/production.json /opt/ant-cache-3/config.json
+
+# Edit each config to use different ports
+sed -i 's/"8890"/"8890"/' /opt/ant-cache-1/config.json
+sed -i 's/"8890"/"8891"/' /opt/ant-cache-2/config.json
+sed -i 's/"8890"/"8892"/' /opt/ant-cache-3/config.json
+
+# Start instances
+cd /opt/ant-cache-1 && ./ant-cache -config config.json &
+cd /opt/ant-cache-2 && ./ant-cache -config config.json &
+cd /opt/ant-cache-3 && ./ant-cache -config config.json &
 ```
 
-## System Service Setup
-
-### Linux (systemd)
+### Systemd Service
 
 Create `/etc/systemd/system/ant-cache.service`:
 
 ```ini
 [Unit]
-Description=Ant-Cache Memory Cache Server
+Description=Ant-Cache Server
 After=network.target
 
 [Service]
 Type=simple
 User=ant-cache
-Group=ant-cache
 WorkingDirectory=/opt/ant-cache
 ExecStart=/opt/ant-cache/ant-cache -config /opt/ant-cache/config.json
 Restart=always
@@ -158,158 +277,108 @@ WantedBy=multi-user.target
 Enable and start:
 
 ```bash
-sudo systemctl daemon-reload
 sudo systemctl enable ant-cache
 sudo systemctl start ant-cache
+sudo systemctl status ant-cache
 ```
 
-### Docker
+## Monitoring
 
-Create `Dockerfile`:
-
-```dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go build -o ant-cache
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /root/
-COPY --from=builder /app/ant-cache .
-COPY --from=builder /app/config.json .
-EXPOSE 8890
-CMD ["./ant-cache"]
-```
-
-Build and run:
+### Health Check
 
 ```bash
-docker build -t ant-cache .
-docker run -d -p 8890:8890 ant-cache
+# Simple connectivity test
+echo "SET health_check ok" | nc localhost 8890
+
+# Response should be: OK
 ```
 
-## Data Persistence
-
-### File Locations
-
-- **ATD File**: `cache.atd` (binary snapshot)
-- **ACL File**: `cache.acl` (command log)
-- **Auth File**: `auth.dat` (encrypted passwords)
-
-### Backup Strategy
+### Performance Monitoring
 
 ```bash
-# Backup data files
-cp cache.atd cache.atd.backup
-cp cache.acl cache.acl.backup
-cp config.json config.json.backup
+# Run benchmark
+./scripts/performance_benchmark.sh
+
+# Monitor with system tools
+top -p $(pgrep ant-cache)
+netstat -an | grep :8890
 ```
 
-### Recovery
+### Log Monitoring
 
 ```bash
-# Restore from backup
-cp cache.atd.backup cache.atd
-cp cache.acl.backup cache.acl
-./ant-cache
-```
+# Monitor server logs
+tail -f ant-cache.log
 
-## Security
-
-### Authentication
-
-Enable authentication by setting a password in config.json:
-
-```json
-{
-  "auth": {
-    "password": "your_secure_password"
-  }
-}
-```
-
-### Network Security
-
-- Bind to localhost for local-only access
-- Use firewall rules for remote access
-- Consider TLS proxy for encrypted connections
-
-### File Permissions
-
-```bash
-chmod 600 config.json    # Config file
-chmod 600 auth.dat       # Password file
-chmod 644 cache.atd      # Data files
-chmod 644 cache.acl
+# Monitor system logs
+journalctl -u ant-cache -f
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Config file not found:**
-```bash
-# Ensure config.json exists in current directory
-ls -la config.json
-
-# Or specify config file path
-./ant-cache -config /path/to/config.json
-```
-
-**Port already in use:**
+**Port already in use**:
 ```bash
 # Check what's using the port
 lsof -i :8890
 
-# Use different port in config.json
+# Use different port
+./ant-cache -port 8891
 ```
 
-**Permission denied:**
+**Permission denied**:
 ```bash
 # Check file permissions
-ls -la cache.*
+ls -la cache.atd cache.acl
 
 # Fix permissions
 chmod 644 cache.atd cache.acl
 ```
 
-### Verification
-
+**High memory usage**:
 ```bash
-# Check configuration
-./ant-cache -query
+# Switch to pooled-goroutine mode
+./ant-cache -server pooled-goroutine -workers 100
 
-# Test connection
-echo "KEYS" | nc localhost 8890
-
-# Check logs
-journalctl -u ant-cache -f
+# Monitor memory usage
+ps aux | grep ant-cache
 ```
 
-## Performance Tuning
-
-### Memory Settings
-
+**Connection refused**:
 ```bash
-export GOGC=100          # Adjust GC frequency
-export GOMEMLIMIT=2GiB   # Limit memory usage
+# Check if server is running
+ps aux | grep ant-cache
+
+# Check network binding
+netstat -tlnp | grep ant-cache
+
+# Test local connection
+telnet localhost 8890
 ```
 
-### File Descriptors
+### Performance Tuning
 
+**System limits**:
 ```bash
-ulimit -n 65536          # Increase file descriptor limit
+# Increase file descriptor limit
+ulimit -n 65536
+
+# For permanent change, edit /etc/security/limits.conf
+echo "* soft nofile 65536" >> /etc/security/limits.conf
+echo "* hard nofile 65536" >> /etc/security/limits.conf
 ```
 
-### Persistence Tuning
-
-- **High write load**: Decrease `acl_interval` to "100ms"
-- **Low write load**: Increase `atd_interval` to "2h"
-- **Memory constrained**: Increase `atd_interval`, decrease `acl_interval`
+**Network tuning**:
+```bash
+# Optimize TCP settings
+echo 'net.core.somaxconn = 65535' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_max_syn_backlog = 65535' >> /etc/sysctl.conf
+sysctl -p
+```
 
 ## Next Steps
 
-- Read the [Usage Guide](USAGE.md) to learn how to use Ant-Cache
-- Check the [Commands Reference](COMMANDS.md) for all available commands
-- Review [Performance Report](PERFORMANCE.md) for optimization tips
+- Review [Commands Reference](COMMANDS.md) for available operations
+- Check [Performance Guide](PERFORMANCE.md) for optimization tips
+- Configure monitoring and alerting for production use

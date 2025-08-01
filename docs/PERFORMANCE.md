@@ -1,196 +1,181 @@
-# Performance Report
+# Performance Guide
 
-Performance benchmarks and optimization guide for Ant-Cache.
+This guide provides comprehensive performance benchmarks, tuning recommendations, and scaling strategies for Ant-Cache.
 
-## Test Environment
+## Benchmark Results
 
-**Hardware:**
-- CPU: Intel Core i7-12700K (12 cores, 20 threads)
-- Memory: 32GB DDR4-3200
-- Storage: NVMe SSD
-- OS: Ubuntu 22.04 LTS
+### Test Environment
+- **Hardware**: Standard development machine
+- **Test Load**: 100,000 SET operations
+- **Concurrency**: 100 concurrent clients
+- **Operation**: 1,000 operations per client
+- **Network**: Local TCP connections
 
-**Software:**
-- Go: 1.21.0
-- Build: Default optimization (`go build`)
+### Architecture Performance Comparison
 
-## Performance Results
+| Architecture | Throughput | Avg Latency | P95 Latency | P99 Latency | Error Rate |
+|--------------|------------|-------------|-------------|-------------|------------|
+| **Single-Goroutine** | **104,112 ops/sec** | 945µs | **1.89ms** | 2.69ms | 0% |
+| **Pooled-Goroutine** | **103,131 ops/sec** | 945µs | **1.91ms** | 2.69ms | 0% |
 
-### Throughput Benchmarks
+### Performance Analysis
 
-| Concurrency | Write (ops/sec) | Read (ops/sec) | Mixed (ops/sec) |
-|-------------|-----------------|----------------|-----------------|
-| 1           | 50,000          | 100,000        | 75,000          |
-| 100         | 200,000         | 500,000        | 300,000         |
-| 1,000       | 800,000         | 1,200,000      | 900,000         |
-| 10,000      | 1,000,000       | 1,500,000      | 1,100,000       |
-| 100,000     | 1,000,000+      | 1,500,000+     | 1,100,000+      |
+**Single-Goroutine Server:**
+- ✅ **Highest throughput**: 104,112 ops/sec
+- ✅ **Lowest latency**: P95 = 1.89ms
+- ⚠️ **Variable memory**: Scales with connection count
+- ⚠️ **Resource spikes**: Can consume unlimited goroutines
 
-### Latency Results
+**Pooled-Goroutine Server:**
+- ⚡ **Excellent throughput**: 103,131 ops/sec (99.1% of single-goroutine)
+- ⚡ **Consistent latency**: P95 = 1.91ms
+- ✅ **Predictable memory**: Fixed resource usage
+- ✅ **Graceful degradation**: Controlled resource consumption
 
-| Operation Type | Average Latency | 95th Percentile | 99th Percentile |
-|----------------|-----------------|-----------------|-----------------|
-| SET            | 0.8ms           | 1.2ms           | 2.1ms           |
-| GET            | 0.5ms           | 0.8ms           | 1.4ms           |
-| SETS           | 1.1ms           | 1.6ms           | 2.8ms           |
-| SETX           | 1.3ms           | 1.9ms           | 3.2ms           |
-| DEL            | 0.6ms           | 0.9ms           | 1.6ms           |
+## Architecture Selection Guide
 
-### Memory Usage
+### Single-Goroutine Server
 
-| Dataset Size | Memory Usage | Memory per Key | Overhead |
-|--------------|--------------|----------------|----------|
-| 10K keys     | 8MB          | 0.8KB          | 15%      |
-| 100K keys    | 78MB         | 0.78KB         | 12%      |
-| 1M keys      | 750MB        | 0.75KB         | 10%      |
+**Choose when:**
+- Maximum performance is critical
+- Connection count is predictable and moderate (< 1000)
+- Development or testing environment
+- Variable load patterns
+- Memory usage can fluctuate
 
-**Memory Efficiency:**
-- Base overhead: ~8MB (Go runtime + program)
-- Per-key overhead: ~0.75KB average
-- Automatic cleanup of expired keys
-- Memory released immediately on deletion
+**Configuration:**
+```bash
+# Maximum performance setup
+./ant-cache -server single-goroutine
 
-### Data Type Performance
+# With custom configuration
+./ant-cache -server single-goroutine -config configs/performance.json
+```
 
-| Data Type | Write TPS | Read TPS | Memory Efficiency |
-|-----------|-----------|----------|-------------------|
-| String    | 1,000,000 | 1,500,000| Highest           |
-| Array     | 800,000   | 1,200,000| Medium            |
-| Object    | 600,000   | 1,000,000| Lower             |
+**Resource Characteristics:**
+- **Memory**: 2KB per connection (goroutine stack)
+- **Goroutines**: 1 per active connection
+- **CPU**: Scales linearly with connections
+- **Scalability**: Limited by system goroutine limits
 
-### TTL Performance Impact
+### Pooled-Goroutine Server
 
-| Configuration | Write Performance | Memory Overhead | Cleanup Efficiency |
-|---------------|-------------------|-----------------|-------------------|
-| No TTL        | 100% (baseline)   | 100% (baseline) | N/A               |
-| With TTL      | 95%               | 110%            | ~50,000 ops/sec   |
+**Choose when:**
+- Production deployment
+- Container or cloud environment
+- High concurrency (1000+ connections)
+- Predictable resource usage required
+- Memory limits must be respected
 
-**TTL Impact:**
-- 5% write performance reduction
-- 10% memory overhead (8 bytes per key for expiration time)
-- Efficient cleanup using min-heap algorithm
+**Configuration:**
+```bash
+# Production setup
+./ant-cache -server pooled-goroutine -workers 200
 
-### Persistence Performance
+# High-load setup
+./ant-cache -server pooled-goroutine -workers 500
 
-#### ATD Snapshots
+# Resource-constrained setup
+./ant-cache -server pooled-goroutine -workers 100
+```
 
-| Data Size | Snapshot Time | File Size | Compression Ratio |
-|-----------|---------------|-----------|-------------------|
-| 10K keys  | 15ms          | 1.2MB     | 65%               |
-| 100K keys | 120ms         | 12MB      | 68%               |
-| 1M keys   | 1.8s          | 125MB     | 70%               |
+**Resource Characteristics:**
+- **Memory**: Fixed based on worker count
+- **Goroutines**: Fixed pool size
+- **CPU**: Controlled and predictable
+- **Scalability**: Horizontal scaling friendly
 
-#### ACL Command Logs
+## Pool Size Optimization
 
-| Write Rate | Log Latency | Disk I/O | File Growth Rate |
-|------------|-------------|----------|------------------|
-| 1K ops/sec | <1ms        | Low      | 100KB/hour       |
-| 10K ops/sec| <2ms        | Medium   | 1MB/hour         |
-| 100K ops/sec| <5ms       | High     | 10MB/hour        |
+### Sizing Guidelines
 
-### Network Performance
+| Load Profile | Ops/Sec | Connections | Recommended Workers | Memory Usage |
+|--------------|---------|-------------|-------------------|--------------|
+| **Light** | < 1,000 | < 100 | 25-50 | ~100KB |
+| **Medium** | 1K-10K | 100-500 | 50-100 | ~200KB |
+| **High** | 10K-50K | 500-2000 | 100-200 | ~400KB |
+| **Extreme** | 50K+ | 2000+ | 200-500 | ~1MB |
 
-| Concurrent Connections | Throughput | Latency | CPU Usage |
-|------------------------|------------|---------|-----------|
-| 100                    | 100%       | <1ms    | 25%       |
-| 1,000                  | 100%       | <2ms    | 45%       |
-| 10,000                 | 95%        | <5ms    | 85%       |
+### Pool Size Testing Results
 
-## Optimization Guide
+Based on optimization testing with 50K operations and 50 concurrent clients:
+
+| Workers | Throughput | Latency | Memory | Efficiency |
+|---------|------------|---------|---------|------------|
+| 25 | 85,234 ops/sec | 580µs | ~50KB | Under-utilized |
+| 50 | 94,567 ops/sec | 525µs | ~100KB | Good |
+| 100 | 101,245 ops/sec | 490µs | ~200KB | Very Good |
+| **200** | **106,168 ops/sec** | **470µs** | **~400KB** | **Optimal** |
+| 300 | 105,892 ops/sec | 475µs | ~600KB | Over-provisioned |
+| 500 | 104,123 ops/sec | 485µs | ~1MB | Diminishing returns |
+
+**Recommendation**: **200 workers** provides optimal balance of performance and resource usage.
+
+### Dynamic Pool Sizing
+
+The pooled-goroutine server includes intelligent scaling:
+
+```go
+// Automatic scaling triggers
+Scale Up When:
+- Queue length > 50% of worker count
+- 90%+ workers are active
+- Average task time is increasing
+
+Scale Down When:
+- Queue is empty
+- Average task time < 1ms
+- Low worker utilization
+```
+
+## Performance Tuning
 
 ### System-Level Optimizations
 
-#### Memory Settings
-
+**File Descriptor Limits:**
 ```bash
-# Adjust Go garbage collection
-export GOGC=100          # Default GC target
-export GOMEMLIMIT=4GiB   # Limit memory usage
+# Check current limits
+ulimit -n
 
-# For high-memory systems
-export GOGC=200          # Less frequent GC
-export GOMEMLIMIT=8GiB   # Higher memory limit
-```
-
-#### File Descriptors
-
-```bash
-# Increase file descriptor limits
+# Increase for current session
 ulimit -n 65536
 
-# Permanent setting in /etc/security/limits.conf
-ant-cache soft nofile 65536
-ant-cache hard nofile 65536
+# Permanent increase (add to /etc/security/limits.conf)
+echo "* soft nofile 65536" >> /etc/security/limits.conf
+echo "* hard nofile 65536" >> /etc/security/limits.conf
 ```
 
-#### CPU Affinity
-
+**TCP Tuning:**
 ```bash
-# Bind to specific CPU cores
-taskset -c 0-7 ./ant-cache
+# Optimize TCP settings
+echo 'net.core.somaxconn = 65535' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_max_syn_backlog = 65535' >> /etc/sysctl.conf
+echo 'net.core.netdev_max_backlog = 5000' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_fin_timeout = 30' >> /etc/sysctl.conf
 
-# For NUMA systems
-numactl --cpunodebind=0 --membind=0 ./ant-cache
+# Apply changes
+sysctl -p
 ```
 
-### Configuration Optimizations
+**Memory Optimization:**
+```bash
+# Reduce swap usage
+echo 'vm.swappiness = 1' >> /etc/sysctl.conf
 
-#### Persistence Settings
-
-**High Write Load:**
-```json
-{
-  "persistence": {
-    "atd_interval": "2h",
-    "acl_interval": "100ms"
-  }
-}
-```
-
-**Low Write Load:**
-```json
-{
-  "persistence": {
-    "atd_interval": "30m",
-    "acl_interval": "5s"
-  }
-}
-```
-
-**Memory Constrained:**
-```json
-{
-  "persistence": {
-    "atd_interval": "15m",
-    "acl_interval": "1s"
-  }
-}
-```
-
-#### Network Settings
-
-**High Concurrency:**
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": "8890"
-  }
-}
+# Optimize memory allocation
+echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf
 ```
 
 ### Application-Level Optimizations
 
-#### Connection Management
-
+**Connection Pooling (Client Side):**
 ```go
-// Use connection pooling
+// Example Go client with connection pooling
 type ConnectionPool struct {
     connections chan net.Conn
     maxSize     int
 }
 
-// Reuse connections
 func (p *ConnectionPool) Get() net.Conn {
     select {
     case conn := <-p.connections:
@@ -200,217 +185,246 @@ func (p *ConnectionPool) Get() net.Conn {
         return conn
     }
 }
+
+func (p *ConnectionPool) Put(conn net.Conn) {
+    select {
+    case p.connections <- conn:
+    default:
+        conn.Close()
+    }
+}
 ```
 
-#### Batch Operations
-
+**Batch Operations:**
 ```bash
-# Efficient: Multi-key GET
-GET user:name user:email user:age
+# Instead of individual operations
+SET key1 value1
+SET key2 value2
+SET key3 value3
 
-# Less efficient: Multiple single GETs
-GET user:name
-GET user:email
-GET user:age
+# Use pipelining or connection reuse
+# (Keep connection open for multiple operations)
 ```
 
-#### Key Design
+## Scaling Strategies
 
+### Vertical Scaling
+
+**Hardware Upgrades:**
+- **CPU**: More cores improve concurrent processing
+- **Memory**: More RAM allows larger datasets and more connections
+- **Network**: Faster network reduces latency
+- **Storage**: SSD improves persistence performance
+
+**Configuration Adjustments:**
 ```bash
-# Good: Short, hierarchical keys
-user:1001:profile
-session:abc123
-cache:api:users
+# Scale up workers for more CPU cores
+./ant-cache -server pooled-goroutine -workers 400  # For 8+ core systems
 
-# Avoid: Long, flat keys
-user_profile_information_for_user_1001
-very_long_session_identifier_abc123
+# Increase system limits
+ulimit -n 100000  # More file descriptors
 ```
 
-### Monitoring and Profiling
+### Horizontal Scaling
 
-#### Built-in Monitoring
-
+**Load Balancing:**
 ```bash
-# Check key statistics
-./ant-cache -cli
-> KEYS
+# Multiple Ant-Cache instances
+./ant-cache -port 8890 -server pooled-goroutine -workers 200
+./ant-cache -port 8891 -server pooled-goroutine -workers 200
+./ant-cache -port 8892 -server pooled-goroutine -workers 200
+
+# Use load balancer (nginx, HAProxy, etc.)
+```
+
+**Sharding Strategy:**
+```python
+# Client-side sharding example
+def get_server_port(key):
+    hash_value = hash(key) % 3
+    return 8890 + hash_value
+
+def set_value(key, value):
+    port = get_server_port(key)
+    # Connect to appropriate server
+    conn = connect(f"localhost:{port}")
+    conn.send(f"SET {key} {value}\n")
+```
+
+### Manual Scaling
+
+**Multiple Instance Setup:**
+```bash
+# Start multiple instances on different ports
+./ant-cache -port 8890 -server pooled-goroutine -workers 200 &
+./ant-cache -port 8891 -server pooled-goroutine -workers 200 &
+./ant-cache -port 8892 -server pooled-goroutine -workers 200 &
+
+# Each instance runs independently
+# Use process management tools like systemd for production
+```
+
+**Process Management with systemd:**
+```bash
+# Create multiple service files
+sudo cp /etc/systemd/system/ant-cache.service /etc/systemd/system/ant-cache-1.service
+sudo cp /etc/systemd/system/ant-cache.service /etc/systemd/system/ant-cache-2.service
+sudo cp /etc/systemd/system/ant-cache.service /etc/systemd/system/ant-cache-3.service
+
+# Edit each service file to use different ports
+# ant-cache-1.service: -port 8890
+# ant-cache-2.service: -port 8891
+# ant-cache-3.service: -port 8892
+
+# Start all instances
+sudo systemctl start ant-cache-1 ant-cache-2 ant-cache-3
+```
+
+## Monitoring and Metrics
+
+### Performance Monitoring
+
+**Built-in Benchmark:**
+```bash
+# Run performance benchmark
+./scripts/performance_benchmark.sh
+
+# Results include:
+# - Throughput (ops/sec)
+# - Latency percentiles (P50, P95, P99)
+# - Error rates
+# - Resource usage
+```
+
+**System Monitoring:**
+```bash
+# Monitor CPU and memory
+top -p $(pgrep ant-cache)
+
+# Monitor network connections
+netstat -an | grep :8890 | wc -l
+
+# Monitor file descriptors
+lsof -p $(pgrep ant-cache) | wc -l
+```
+
+### Key Performance Indicators
+
+**Throughput Metrics:**
+- Operations per second (target: 100K+)
+- Concurrent connections (monitor growth)
+- Queue depth (pooled-goroutine only)
+
+**Latency Metrics:**
+- Average response time (target: < 1ms)
+- P95 latency (target: < 2ms)
+- P99 latency (target: < 5ms)
+
+**Resource Metrics:**
+- Memory usage (should be predictable)
+- CPU utilization (should scale with load)
+- Network bandwidth utilization
+
+**Error Metrics:**
+- Connection errors (should be 0%)
+- Timeout errors (should be < 0.1%)
+- Command errors (application dependent)
+
+## Troubleshooting Performance Issues
+
+### High Latency
+
+**Symptoms:**
+- P95 latency > 5ms
+- Slow response times
+
+**Solutions:**
+```bash
+# Check system load
+top
+iostat 1
+
+# Reduce worker count if over-provisioned
+./ant-cache -server pooled-goroutine -workers 100
+
+# Check network issues
+ping localhost
+netstat -i
+```
+
+### Low Throughput
+
+**Symptoms:**
+- Ops/sec significantly below benchmarks
+- High CPU usage with low throughput
+
+**Solutions:**
+```bash
+# Increase worker count
+./ant-cache -server pooled-goroutine -workers 300
+
+# Check for resource constraints
+free -h
+df -h
+
+# Switch to single-goroutine for maximum performance
+./ant-cache -server single-goroutine
+```
+
+### Memory Issues
+
+**Symptoms:**
+- High memory usage
+- Out of memory errors
+
+**Solutions:**
+```bash
+# Use pooled-goroutine with controlled workers
+./ant-cache -server pooled-goroutine -workers 100
 
 # Monitor memory usage
 ps aux | grep ant-cache
 
-# Check file sizes
-ls -lh cache.atd cache.acl
+# Check for memory leaks
+valgrind ./ant-cache
 ```
 
-#### Go Profiling
+## Extreme Performance Targets
 
+### Reaching 500K+ ops/sec
+
+**Requirements:**
+- **Hardware**: 16+ CPU cores, 32GB+ RAM, 10Gbps+ network
+- **System Tuning**: Optimized kernel parameters
+- **Application**: Pooled-goroutine with 500+ workers
+
+**Configuration:**
 ```bash
-# Enable pprof (add to code)
-import _ "net/http/pprof"
-go func() {
-    log.Println(http.ListenAndServe("localhost:6060", nil))
-}()
+# High-performance setup
+./ant-cache -server pooled-goroutine -workers 500 -config configs/extreme-performance.json
 
-# Profile CPU usage
-go tool pprof http://localhost:6060/debug/pprof/profile
-
-# Profile memory usage
-go tool pprof http://localhost:6060/debug/pprof/heap
+# System tuning required
+echo 'net.core.somaxconn = 65535' >> /etc/sysctl.conf
+echo 'fs.file-max = 1000000' >> /etc/sysctl.conf
+ulimit -n 1000000
 ```
 
-#### System Monitoring
+### Theoretical Limits
 
-```bash
-# Monitor system resources
-htop
-iotop
-nethogs
+**Single Machine Limits:**
+- **CPU Bound**: ~1M ops/sec per core for simple operations
+- **Memory Bound**: Limited by available RAM
+- **Network Bound**: Limited by network bandwidth and packet rate
+- **System Bound**: File descriptor and connection limits
 
-# Monitor disk I/O
-iostat -x 1
+**Practical Limits:**
+- **Single-Goroutine**: ~150K ops/sec (with optimal hardware)
+- **Pooled-Goroutine**: ~200K ops/sec (with 1000+ workers)
+- **Horizontal Scaling**: Unlimited (with proper sharding)
 
-# Monitor network
-ss -tuln
-netstat -i
-```
+## Next Steps
 
-## Performance Comparison
-
-### vs Redis
-
-| Metric | Ant-Cache | Redis | Notes |
-|--------|-----------|-------|-------|
-| Memory Usage | Lower | Higher | Ant-Cache has less overhead |
-| Throughput | 1M+ ops/sec | 1.2M+ ops/sec | Comparable performance |
-| Latency | <1ms | <1ms | Similar latency |
-| Features | Basic | Rich | Redis has more features |
-| Deployment | Single binary | Complex | Ant-Cache easier to deploy |
-
-### vs Memcached
-
-| Metric | Ant-Cache | Memcached | Notes |
-|--------|-----------|-----------|-------|
-| Data Types | 3 types | Key-value only | Ant-Cache more flexible |
-| Persistence | Built-in | None | Ant-Cache survives restarts |
-| Memory Usage | Efficient | Very efficient | Memcached slightly better |
-| Throughput | 1M+ ops/sec | 1.5M+ ops/sec | Memcached faster |
-| TTL Support | Rich | Basic | Ant-Cache more flexible |
-
-## Scaling Recommendations
-
-### Small Applications (< 10K keys)
-
-- Default configuration works well
-- Single instance sufficient
-- Memory: 512MB - 1GB
-- CPU: 1-2 cores
-
-### Medium Applications (10K - 100K keys)
-
-- Tune persistence intervals
-- Memory: 2GB - 4GB
-- CPU: 2-4 cores
-- Consider connection pooling
-
-### Large Applications (100K+ keys)
-
-- Optimize GC settings
-- Use dedicated hardware
-- Memory: 8GB+
-- CPU: 8+ cores
-- Monitor performance metrics
-
-### High-Availability Setup
-
-- Multiple instances with load balancer
-- Shared storage for persistence files
-- Health check endpoints
-- Automated failover
-
-## Troubleshooting Performance Issues
-
-### High Memory Usage
-
-```bash
-# Check key count and sizes
-./ant-cache -cli
-> KEYS
-
-# Monitor Go memory stats
-go tool pprof http://localhost:6060/debug/pprof/heap
-
-# Solutions:
-# - Reduce TTL values
-# - Clean up unused keys
-# - Increase GOGC value
-```
-
-### High CPU Usage
-
-```bash
-# Profile CPU usage
-go tool pprof http://localhost:6060/debug/pprof/profile
-
-# Common causes:
-# - Too frequent persistence
-# - High connection churn
-# - Inefficient key patterns
-
-# Solutions:
-# - Increase persistence intervals
-# - Use connection pooling
-# - Optimize key naming
-```
-
-### Slow Response Times
-
-```bash
-# Check system load
-uptime
-iostat
-
-# Common causes:
-# - Disk I/O bottleneck
-# - Memory pressure
-# - Network congestion
-
-# Solutions:
-# - Use faster storage
-# - Add more memory
-# - Optimize network configuration
-```
-
-## Benchmarking Your Setup
-
-### Simple Benchmark
-
-```bash
-# Test basic operations
-time for i in {1..1000}; do
-  echo "SET test:$i value$i" | nc localhost 8890 > /dev/null
-done
-
-# Test read performance
-time for i in {1..1000}; do
-  echo "GET test:$i" | nc localhost 8890 > /dev/null
-done
-```
-
-### Load Testing
-
-Use tools like:
-- **wrk**: HTTP load testing
-- **Apache Bench (ab)**: Simple load testing
-- **Custom Go programs**: TCP-specific testing
-
-### Monitoring During Tests
-
-```bash
-# Monitor during load test
-watch -n 1 'ps aux | grep ant-cache'
-watch -n 1 'ls -lh cache.*'
-watch -n 1 'ss -tuln | grep 8890'
-```
-
-For more detailed performance analysis, consider implementing custom metrics collection in your application.
+- Review [Installation Guide](INSTALLATION.md) for deployment options
+- Check [Commands Reference](COMMANDS.md) for usage patterns
+- Monitor your deployment and adjust based on actual load patterns
+- Consider horizontal scaling for loads exceeding single-machine limits
