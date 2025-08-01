@@ -3,11 +3,13 @@
     "host": "0.0.0.0",
     "port": "8890"
   },
-  "auth": {
-    "password": "your_secure_password_here"
-  },
   "persistence": {
-    "atd_interval": "30m",
-    "acl_interval": "1s"
+    "atd_file": "/var/lib/ant-cache/cache.atd",
+    "atd_interval": "1h",
+    "acl_file": "/var/lib/ant-cache/cache.acl",
+    "acl_interval": "5s"
+  },
+  "auth": {
+    "password": ""
   }
 }

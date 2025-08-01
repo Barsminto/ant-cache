@@ -55,6 +55,8 @@ func main() {
 	aclInterval := flag.Duration("acl-interval", 1*time.Second, "ACL sync interval (min 1s, max 1m)")
 
 	queryConfig := flag.Bool("query", false, "Query current configuration")
+	serverType := flag.String("server", "single-goroutine", "Server type: 'single-goroutine' or 'pooled-goroutine' (default: single-goroutine)")
+	maxWorkers := flag.Int("workers", 200, "Number of worker goroutines for pooled server (default: 200)")
 	flag.Parse()
 
 	// Determine config file path
@@ -161,9 +163,27 @@ func main() {
 	}
 
 	// Start TCP server
-	log.Printf("Starting TCP cache server on %s:%s", cfg.Server.Host, cfg.Server.Port)
-	if err := tcpserver.Start(cacheInstance, cfg.Server.Port); err != nil {
-		log.Fatal(err)
+	log.Printf("Starting %s TCP cache server on %s:%s", *serverType, cfg.Server.Host, cfg.Server.Port)
+
+	switch *serverType {
+	case "single-goroutine":
+		// Single-threaded listener with one goroutine per connection (direct cache memory access)
+		fmt.Println("Starting single-goroutine server...")
+		singleServer := tcpserver.NewSingleGoroutineServer(cacheInstance)
+		if err := singleServer.Start(cfg.Server.Host, cfg.Server.Port); err != nil {
+			log.Fatal(err)
+		}
+
+	case "pooled-goroutine":
+		// Single-threaded listener with goroutine pool (direct cache memory access)
+		fmt.Printf("Starting pooled-goroutine server (%d workers)...\n", *maxWorkers)
+		pooledServer := tcpserver.NewPooledGoroutineServer(cacheInstance, *maxWorkers)
+		if err := pooledServer.Start(cfg.Server.Host, cfg.Server.Port); err != nil {
+			log.Fatal(err)
+		}
+
+	default:
+		log.Fatalf("Unknown server type: %s. Available types: single-goroutine, pooled-goroutine", *serverType)
 	}
 }
 
