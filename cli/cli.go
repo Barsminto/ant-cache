@@ -59,7 +59,7 @@ func StartInteractiveCLI(cache *cache.Cache, host string, port string, configPas
 		}
 
 		switch strings.ToUpper(parts[0]) {
-		case "SET", "SETS", "SETX", "GET", "DEL", "KEYS", "FLUSHALL":
+		case "SET", "SETS", "SETX", "SETNX", "SETSNX", "SETXNX", "GET", "DEL", "KEYS", "FLUSHALL":
 			handleCacheCommand(cache, parts)
 			fmt.Print("> ")
 		case "AUTH":
@@ -143,6 +143,57 @@ func handleCacheCommand(cache *cache.Cache, parts []string) {
 
 		cache.Set(key, object, ttl)
 		fmt.Println("OK")
+
+	case "SETNX":
+		if len(filteredParts) < 3 {
+			fmt.Println("ERROR: SETNX requires key and value")
+			return
+		}
+		key := filteredParts[1]
+		value := strings.Join(filteredParts[2:], " ")
+		if cache.SetNX(key, value, ttl) {
+			fmt.Println("OK")
+		} else {
+			fmt.Println("NOT_SET")
+		}
+
+	case "SETSNX":
+		if len(filteredParts) < 3 {
+			fmt.Println("ERROR: SETSNX requires key and at least one array element")
+			return
+		}
+		key := filteredParts[1]
+		// All remaining parts become array elements
+		array := filteredParts[2:]
+
+		if cache.SetNX(key, array, ttl) {
+			fmt.Println("OK")
+		} else {
+			fmt.Println("NOT_SET")
+		}
+
+	case "SETXNX":
+		if len(filteredParts) < 4 {
+			fmt.Println("ERROR: SETXNX requires key and at least one key-value pair")
+			return
+		}
+		if (len(filteredParts)-2)%2 != 0 {
+			fmt.Println("ERROR: SETXNX requires even number of arguments for key-value pairs")
+			return
+		}
+
+		key := filteredParts[1]
+		// Convert pairs to map: a b c d -> {a: b, c: d}
+		object := make(map[string]string)
+		for i := 2; i < len(filteredParts); i += 2 {
+			object[filteredParts[i]] = filteredParts[i+1]
+		}
+
+		if cache.SetNX(key, object, ttl) {
+			fmt.Println("OK")
+		} else {
+			fmt.Println("NOT_SET")
+		}
 
 	case "GET":
 		if len(filteredParts) < 2 {

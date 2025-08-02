@@ -16,7 +16,7 @@ This guide covers installation, configuration, and deployment of Ant-Cache.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ant-cache.git
+git clone https://github.com/Barsminto/ant-cache.git
 cd ant-cache
 
 # Build the binary

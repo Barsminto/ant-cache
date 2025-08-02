@@ -137,12 +137,29 @@ func main() {
 	log.Printf("ATD file: %s, ACL file: %s", atdPath, aclPath)
 	log.Printf("ATD interval: %v, ACL interval: %v", atdIntervalDuration, aclIntervalDuration)
 
+	// Create compression config from configuration
+	compressionConfig := cache.CompressionConfig{
+		Enabled:     cfg.Compression.Enabled,
+		MinSize:     cfg.Compression.MinSize,
+		StringsOnly: cfg.Compression.StringsOnly,
+	}
+
+	if cfg.Compression.Enabled {
+		log.Printf("Compression enabled: min_size=%d, strings_only=%v",
+			cfg.Compression.MinSize, cfg.Compression.StringsOnly)
+	} else {
+		log.Printf("Compression disabled")
+	}
+
 	var cacheInstance *cache.Cache
 	if authManager != nil {
 		cacheInstance = cache.NewWithPersistenceAndAuth(atdPath, aclPath, atdIntervalDuration, aclIntervalDuration, authManager)
 	} else {
 		cacheInstance = cache.NewWithPersistence(atdPath, aclPath, atdIntervalDuration, aclIntervalDuration)
 	}
+
+	// Apply compression config
+	cacheInstance.SetCompressionConfig(compressionConfig)
 
 	// If configuration file loaded successfully, use config values
 	if cfg != nil {

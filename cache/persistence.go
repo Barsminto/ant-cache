@@ -56,15 +56,18 @@ const (
 
 // Command types
 const (
-	CMD_SET  = "SET"
-	CMD_SETS = "SETS"
-	CMD_SETX = "SETX"
-	CMD_DEL  = "DEL"
-	CMD_DELS = "DELS"
-	CMD_DELX = "DELX"
+	CMD_SET    = "SET"
+	CMD_SETS   = "SETS"
+	CMD_SETX   = "SETX"
+	CMD_SETNX  = "SETNX"
+	CMD_SETSNX = "SETSNX"
+	CMD_SETXNX = "SETXNX"
+	CMD_DEL    = "DEL"
+	CMD_DELS   = "DELS"
+	CMD_DELX   = "DELX"
 )
 
-// NewPersistenceManager create persistence manager
+// NewPersistenceManager create persistence manager with async ACL
 func NewPersistenceManager(cache *Cache, atdPath, aclPath string, atdInterval, aclInterval time.Duration) *PersistenceManager {
 	return &PersistenceManager{
 		cache:          cache,
@@ -74,7 +77,7 @@ func NewPersistenceManager(cache *Cache, atdPath, aclPath string, atdInterval, a
 		aclInterval:    aclInterval,
 		enabled:        true,
 		stopChan:       make(chan struct{}),
-		commandChan:    make(chan Command, 10000), // Larger buffer
+		commandChan:    make(chan Command, 50000), // Much larger buffer for async
 		maxAclFileSize: 10 * 1024 * 1024,          // 10MB
 	}
 }
@@ -660,6 +663,34 @@ func (pm *PersistenceManager) LoadAcl() error {
 			}
 			pm.cache.items[key] = item
 			// stats tracking removed
+		case CMD_SETNX, CMD_SETSNX, CMD_SETXNX:
+			// NX命令：只在键不存在时设置
+			if _, exists := pm.cache.items[key]; !exists {
+				// 确定数据类型
+				var dataType string
+				switch value.(type) {
+				case []string:
+					dataType = "array"
+				case map[string]string:
+					dataType = "object"
+				default:
+					dataType = "string"
+				}
+
+				item := &CacheItem{
+					Value: value,
+					key:   key,
+					Type:  dataType,
+				}
+				// Only set expiration time when ttl > 0
+				if ttl > 0 {
+					item.Expiration = time.Now().Add(ttl).UnixNano()
+					// Add to expiration heap
+					heap.Push(pm.cache.expirationHeap, item)
+				}
+				pm.cache.items[key] = item
+				// stats tracking removed
+			}
 		case CMD_DEL:
 			// 删除字符串类型的key
 			if item, exists := pm.cache.items[key]; exists && item.Type == "string" {
