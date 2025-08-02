@@ -69,6 +69,8 @@ type Cache struct {
 	batchChan chan []BatchOperation
 	// Batch processing workers
 	batchWorkers int
+	// Compression configuration
+	compressionConfig CompressionConfig
 }
 
 // ExpirationHeap implements min heap for managing expiration times
@@ -114,16 +116,10 @@ func New() *Cache {
 	h := &ExpirationHeap{}
 	heap.Init(h)
 	return &Cache{
-		items:          make(map[string]*CacheItem),
-		expirationHeap: h,
+		items:             make(map[string]*CacheItem),
+		expirationHeap:    h,
+		compressionConfig: DefaultCompressionConfig(),
 	}
-}
-
-// NewWithAuth creates cache with authentication
-func NewWithAuth(authManager *auth.AuthManager) *Cache {
-	cache := New()
-	cache.authManager = authManager
-	return cache
 }
 
 // NewWithPersistence create cache with persistence
@@ -161,6 +157,13 @@ func (c *Cache) Close() {
 	}
 }
 
+// SetCompressionConfig sets the compression configuration
+func (c *Cache) SetCompressionConfig(config CompressionConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.compressionConfig = config
+}
+
 func (c *Cache) Set(key string, value interface{}, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -176,8 +179,16 @@ func (c *Cache) Set(key string, value interface{}, ttl time.Duration) {
 		dataType = "string"
 	}
 
+	// Try to compress the value if compression is enabled
+	compressedValue, err := CompressValue(value, dataType, c.compressionConfig)
+	if err != nil {
+		// If compression fails, use the original value
+		fmt.Printf("Compression failed for key %s: %v\n", key, err)
+		compressedValue = value
+	}
+
 	item := &CacheItem{
-		Value: value,
+		Value: compressedValue,
 		key:   key,
 		Type:  dataType,
 	}
@@ -226,8 +237,16 @@ func (c *Cache) SetNX(key string, value interface{}, ttl time.Duration) bool {
 		dataType = "string"
 	}
 
+	// Try to compress the value if compression is enabled
+	compressedValue, err := CompressValue(value, dataType, c.compressionConfig)
+	if err != nil {
+		// If compression fails, use the original value
+		fmt.Printf("Compression failed for key %s: %v\n", key, err)
+		compressedValue = value
+	}
+
 	item := &CacheItem{
-		Value: value,
+		Value: compressedValue,
 		key:   key,
 		Type:  dataType,
 	}
@@ -264,8 +283,16 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 		return nil, false
 	}
 
+	// Try to decompress the value if it's compressed
+	decompressedValue, _, err := DecompressValue(item.Value)
+	if err != nil {
+		// If decompression fails, return the original value
+		fmt.Printf("Decompression failed for key %s: %v\n", key, err)
+		return item.Value, true
+	}
+
 	// Removed stats tracking
-	return item.Value, true
+	return decompressedValue, true
 }
 
 // GetMultiple gets multiple keys at once
@@ -282,7 +309,16 @@ func (c *Cache) GetMultiple(keys []string) map[string]interface{} {
 			if item.Expiration > 0 && now > item.Expiration {
 				continue // Skip expired items
 			}
-			result[key] = item.Value
+
+			// Try to decompress the value if it's compressed
+			decompressedValue, _, err := DecompressValue(item.Value)
+			if err != nil {
+				// If decompression fails, use the original value
+				fmt.Printf("Decompression failed for key %s: %v\n", key, err)
+				result[key] = item.Value
+			} else {
+				result[key] = decompressedValue
+			}
 		}
 	}
 

@@ -18,6 +18,13 @@ type Config struct {
 		AtdInterval string `json:"atd_interval"`
 		AclInterval string `json:"acl_interval"`
 	} `json:"persistence"`
+	Compression struct {
+		Enabled     bool   `json:"enabled"`
+		Type        string `json:"type"`         // "gzip" or "zlib"
+		Level       string `json:"level"`        // "default", "best_speed", "best_compression"
+		MinSize     int    `json:"min_size"`     // 最小压缩大小（字节）
+		StringsOnly bool   `json:"strings_only"` // 是否只压缩字符串
+	} `json:"compression"`
 }
 
 // GetAtdInterval returns the ATD interval as time.Duration
@@ -73,6 +80,16 @@ func LoadConfig(filename string) (*Config, error) {
 	if config.Persistence.AclInterval == "" {
 		config.Persistence.AclInterval = "1s"
 	}
+	// Set default compression values
+	if config.Compression.Type == "" {
+		config.Compression.Type = "gzip"
+	}
+	if config.Compression.Level == "" {
+		config.Compression.Level = "default"
+	}
+	if config.Compression.MinSize == 0 {
+		config.Compression.MinSize = 1024 // 默认1KB
+	}
 
 	return config, nil
 }
@@ -99,7 +116,7 @@ func DefaultConfig() *Config {
 		Auth: struct {
 			Password string `json:"password"`
 		}{
-			Password: "", // 默认无密码，无密码则不启用认证
+			Password: "",
 		},
 		Persistence: struct {
 			AtdInterval string `json:"atd_interval"`
@@ -107,6 +124,19 @@ func DefaultConfig() *Config {
 		}{
 			AtdInterval: "1h",
 			AclInterval: "1s",
+		},
+		Compression: struct {
+			Enabled     bool   `json:"enabled"`
+			Type        string `json:"type"`
+			Level       string `json:"level"`
+			MinSize     int    `json:"min_size"`
+			StringsOnly bool   `json:"strings_only"`
+		}{
+			Enabled:     false,
+			Type:        "gzip",
+			Level:       "default",
+			MinSize:     1024,  // 默认1KB以上的值才压缩
+			StringsOnly: false, // 默认压缩所有类型
 		},
 	}
 }

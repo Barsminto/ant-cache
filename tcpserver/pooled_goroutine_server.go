@@ -457,6 +457,55 @@ func (s *PooledGoroutineServer) processCommandDirect(command string, authenticat
 		s.cache.Set(key, object, ttl)
 		return "OK\n"
 
+	case "SETNX":
+		if len(filteredParts) < 3 {
+			return "ERROR SETNX requires key and value\n"
+		}
+		key := filteredParts[1]
+		value := strings.Join(filteredParts[2:], " ")
+
+		// Direct memory operation
+		ok := s.cache.SetNX(key, value, ttl)
+		if ok {
+			return "OK\n"
+		}
+		return "NOT_SET\n"
+
+	case "SETSNX":
+		if len(filteredParts) < 3 {
+			return "ERROR SETSNX requires key and at least one array element\n"
+		}
+		key := filteredParts[1]
+		array := filteredParts[2:]
+
+		// Direct memory operation
+		ok := s.cache.SetNX(key, array, ttl)
+		if ok {
+			return "OK\n"
+		}
+		return "NOT_SET\n"
+
+	case "SETXNX":
+		if len(filteredParts) < 4 {
+			return "ERROR SETXNX requires key and at least one key-value pair\n"
+		}
+		if (len(filteredParts)-2)%2 != 0 {
+			return "ERROR SETXNX requires even number of arguments for key-value pairs\n"
+		}
+
+		key := filteredParts[1]
+		object := make(map[string]string)
+		for i := 2; i < len(filteredParts); i += 2 {
+			object[filteredParts[i]] = filteredParts[i+1]
+		}
+
+		// Direct memory operation
+		ok := s.cache.SetNX(key, object, ttl)
+		if ok {
+			return "OK\n"
+		}
+		return "NOT_SET\n"
+
 	case "GET":
 		if len(filteredParts) < 2 {
 			return "ERROR GET requires key\n"

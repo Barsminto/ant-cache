@@ -21,7 +21,7 @@ Ant-Cache is designed for applications requiring fast, reliable caching with min
 
 ```bash
 # Clone and build
-git clone https://github.com/yourusername/ant-cache.git
+git clone https://github.com/Barsminto/ant-cache.git
 cd ant-cache
 go build -o ant-cache
 

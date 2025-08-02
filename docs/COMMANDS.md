@@ -11,6 +11,9 @@ Ant-Cache supports Redis-compatible commands with additional TTL functionality a
 | `SET` | Store string value | String | ✅ Yes | ✅ Implemented |
 | `SETS` | Store array value | Array | ✅ Yes | ✅ Implemented |
 | `SETX` | Store object value | Object | ✅ Yes | ✅ Implemented |
+| `SETNX` | Store string only if key doesn't exist | String | ✅ Yes | ✅ Implemented |
+| `SETSNX` | Store array only if key doesn't exist | Array | ✅ Yes | ✅ Implemented |
+| `SETXNX` | Store object only if key doesn't exist | Object | ✅ Yes | ✅ Implemented |
 | `GET` | Retrieve value by key | Any | ❌ No | ✅ Implemented |
 | `DEL` | Delete key | Any | ❌ No | ✅ Implemented |
 | `KEYS` | List keys by pattern | Any | ❌ No | ✅ Implemented |
@@ -155,6 +158,130 @@ SETX config debug true port 8890 host localhost
 - Use quotes for values containing spaces
 - All object values are stored as strings
 - Retrieved objects display as: `map[field1:value1 field2:value2]`
+
+### SETNX Command
+
+Store a string value only if the key does not exist (atomic operation). Returns success only when the key is new.
+
+**Syntax:**
+```
+SETNX key value
+SETNX key -t TTL value
+```
+
+**Parameters:**
+- `key`: String key name
+- `value`: String value (can contain spaces)
+- `TTL`: Time-to-live with units (s, m, h, d, y)
+
+**Examples:**
+```bash
+# Set only if key doesn't exist
+SETNX lock:resource1 "locked"
+# Response: OK (key was set)
+
+# Try to set existing key
+SETNX lock:resource1 "locked_again"
+# Response: NOT_SET (key already exists)
+
+# SetNX with TTL
+SETNX temp:session -t 1h "session_data"
+# Response: OK
+
+# Use for distributed locks
+SETNX job:process1 "running"
+# Response: OK
+
+# Check if key exists before setting
+GET lock:resource1
+# Response: locked
+```
+
+**Important Notes:**
+- Returns `OK` if key was successfully set
+- Returns `NOT_SET` if key already exists
+- Atomic operation - no race conditions
+- Useful for distributed locks, rate limiting, initialization
+
+### SETSNX Command
+
+Store an array value only if the key does not exist (atomic operation).
+
+**Syntax:**
+```
+SETSNX key element1 element2 element3 ...
+SETSNX key -t TTL element1 element2 element3 ...
+```
+
+**Parameters:**
+- `key`: String key name
+- `element1 element2 ...`: Array elements (space-separated)
+- `TTL`: Time-to-live with units (s, m, h, d, y)
+
+**Examples:**
+```bash
+# Set array only if key doesn't exist
+SETSNX initial_tags golang redis cache
+# Response: OK
+
+# Try to set existing key
+SETSNX initial_tags python django flask
+# Response: NOT_SET
+
+# SetSNX with TTL
+SETSNX temp_list -t 30m item1 item2 item3
+# Response: OK
+
+# Initialize configuration lists
+SETSNX default_ports 80 443 8080
+# Response: OK
+```
+
+**Important Notes:**
+- Returns `OK` if key was successfully set
+- Returns `NOT_SET` if key already exists
+- All array elements are stored as strings
+- Useful for initialization, configuration setup
+
+### SETXNX Command
+
+Store an object value only if the key does not exist (atomic operation).
+
+**Syntax:**
+```
+SETXNX key field1 value1 field2 value2 ...
+SETXNX key -t TTL field1 value1 field2 value2 ...
+```
+
+**Parameters:**
+- `key`: String key name
+- `field1 value1 field2 value2 ...`: Key-value pairs (must be even number of arguments)
+- `TTL`: Time-to-live with units (s, m, h, d, y)
+
+**Examples:**
+```bash
+# Set object only if key doesn't exist
+SETXNX default_config debug false port 8890 host localhost
+# Response: OK
+
+# Try to set existing key
+SETXNX default_config debug true port 9000
+# Response: NOT_SET
+
+# SetXNX with TTL
+SETXNX initial_user -t 1h name admin role superuser
+# Response: OK
+
+# Initialize application settings
+SETXNX app:settings theme dark language en timezone UTC
+# Response: OK
+```
+
+**Important Notes:**
+- Returns `OK` if key was successfully set
+- Returns `NOT_SET` if key already exists
+- Arguments after key must be even number (key-value pairs)
+- Useful for configuration initialization, defaults setup
 
 ### GET Command
 
@@ -315,6 +442,60 @@ SETX object_key field1 value1 field2 value2
 - Structured data
 - API responses
 
+### Atomic Operations with NX Commands
+
+The NX ("Not eXists") commands provide atomic operations that only succeed when the key doesn't exist. This is useful for:
+
+- **Distributed locks**: Prevent multiple processes from accessing the same resource
+- **Initialization**: Set default values only once
+- **Rate limiting**: Create tokens only when they don't exist
+- **Configuration setup**: Apply default configurations without overwriting existing ones
+
+**Distributed Lock Example:**
+```bash
+# Process 1 attempts to acquire lock
+SETNX lock:database_backup "process_1"
+# Response: OK (lock acquired)
+
+# Process 2 attempts to acquire same lock
+SETNX lock:database_backup "process_2"
+# Response: NOT_SET (lock already held)
+
+# Release lock when done
+DEL lock:database_backup
+# Response: OK
+```
+
+**Initialization Example:**
+```bash
+# Set default configuration only once
+SETXNX app:defaults debug false port 8890 max_connections 1000
+# Response: OK (first time only)
+
+# Subsequent attempts will fail
+SETXNX app:defaults debug true port 9000
+# Response: NOT_SET (already initialized)
+
+# Check initialized configuration
+GET app:defaults
+# Response: {"debug":"false","port":"8890","max_connections":"1000"}
+```
+
+**Rate Limiting Example:**
+```bash
+# Create rate limit token (expires in 1 minute)
+SETNX rate_limit:user123 -t 1m "1"
+# Response: OK (first request)
+
+# Subsequent requests within 1 minute
+SETNX rate_limit:user123 -t 1m "1"
+# Response: NOT_SET (rate limit active)
+
+# After 1 minute, new token can be created
+SETNX rate_limit:user123 -t 1m "1"
+# Response: OK (rate limit reset)
+```
+
 ### Batch Operations
 
 ```bash
@@ -359,6 +540,15 @@ INVALID_COMMAND
 SET
 # Response: ERROR SET requires key and value
 
+SETNX
+# Response: ERROR SETNX requires key and value
+
+SETSNX
+# Response: ERROR SETSNX requires key and at least one array element
+
+SETXNX
+# Response: ERROR SETXNX requires key and at least one key-value pair
+
 GET
 # Response: ERROR GET requires key
 
@@ -380,6 +570,14 @@ SETX user name John age
 # SETX with insufficient arguments
 SETX user name
 # Response: ERROR SETX requires key and at least one key-value pair
+
+# SETXNX with odd number of arguments
+SETXNX config debug true port
+# Response: ERROR SETXNX requires even number of arguments for key-value pairs
+
+# SETXNX with insufficient arguments
+SETXNX config debug
+# Response: ERROR SETXNX requires key and at least one key-value pair
 ```
 
 ### Success Responses
